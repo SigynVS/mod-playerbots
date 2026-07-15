@@ -1344,6 +1344,12 @@ namespace
     };
     constexpr uint32 WG_ZONE_ID = 4197;
     constexpr uint32 WG_MAP_ID = 571;
+
+    // Siege: attacker crews man demolishers and bombard the fortress front gate
+    constexpr uint32 WG_NPC_DEMOLISHER = 28094;
+    constexpr uint32 WG_SPELL_HURL_BOULDER = 50896;
+    constexpr WgPoint WG_GATE = { 5162.99f, 2841.23f, 410.16f };     // GO 190375
+    constexpr WgPoint WG_SIEGE_POST = { 5105.0f, 2841.0f, 403.0f };  // bombardment range, south of gate
 }
 
 void RandomPlayerbotMgr::CheckWgQueue()
@@ -1373,8 +1379,18 @@ void RandomPlayerbotMgr::CheckWgQueue()
             for (ObjectGuid const& guid : wgBots)
             {
                 if (Player* bot = GetPlayerBot(guid))
+                {
+                    // Decommission siege vehicles before releasing the crew
+                    if (Unit* veh = bot->GetVehicleBase())
+                    {
+                        bot->ExitVehicle();
+                        if (Creature* c = veh->ToCreature())
+                            c->DespawnOrUnsummon();
+                    }
+
                     if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                         botAI->ResetStrategies();
+                }
             }
             LOG_INFO("playerbots", "Wintergrasp: battle over, released {} bot conscripts", wgBots.size());
             wgBots.clear();
@@ -1388,6 +1404,7 @@ void RandomPlayerbotMgr::CheckWgQueue()
     // Upkeep pass over current conscripts: accept pending war invites, issue march
     // orders to idle troops, and drop bots that left the zone (died out, teleported, ...)
     uint32 count[2] = { 0, 0 };
+    uint32 siegeCrews = 0;
     for (auto itr = wgBots.begin(); itr != wgBots.end();)
     {
         Player* bot = GetPlayerBot(*itr);
@@ -1426,6 +1443,24 @@ void RandomPlayerbotMgr::CheckWgQueue()
         if (bot->isAFK())
             bot->ToggleAFK();
 
+        // Siege duty: demolisher crews drive to the bombardment post and shell the gate
+        if (Unit* siegeVehicle = bot->GetVehicleBase())
+        {
+            if (team == wg->GetAttackerTeam())
+                ++siegeCrews;
+
+            if (siegeVehicle->GetExactDist2d(WG_SIEGE_POST.x, WG_SIEGE_POST.y) > 20.0f)
+            {
+                if (!siegeVehicle->isMoving())
+                    siegeVehicle->GetMotionMaster()->MovePoint(0, WG_SIEGE_POST.x, WG_SIEGE_POST.y, WG_SIEGE_POST.z);
+            }
+            else
+                siegeVehicle->CastSpell(WG_GATE.x, WG_GATE.y, WG_GATE.z, WG_SPELL_HURL_BOULDER, true);
+
+            ++itr;
+            continue;  // crews are exempt from infantry march orders
+        }
+
         if (bot->IsAlive() && !bot->IsInCombat() && !bot->isMoving() && !bot->IsBeingTeleported())
         {
             // Attackers push the fortress, defenders split between keep and workshops
@@ -1441,6 +1476,36 @@ void RandomPlayerbotMgr::CheckWgQueue()
         }
 
         ++itr;
+    }
+
+    // Form siege crews: idle attacker infantry summon and man demolishers
+    for (ObjectGuid const& guid : wgBots)
+    {
+        if (siegeCrews >= sPlayerbotAIConfig.wintergraspSiegeCrewCount)
+            break;
+
+        Player* bot = GetPlayerBot(guid);
+        if (!bot || !bot->IsInWorld() || bot->GetZoneId() != WG_ZONE_ID || !bot->IsAlive() ||
+            bot->IsInCombat() || bot->IsBeingTeleported() || bot->GetVehicle())
+            continue;
+
+        if (bot->GetTeamId() != wg->GetAttackerTeam())
+            continue;
+
+        Creature* demolisher = bot->SummonCreature(WG_NPC_DEMOLISHER, bot->GetPositionX() + 4.0f,
+            bot->GetPositionY(), bot->GetPositionZ() + 1.0f, bot->GetOrientation(), TEMPSUMMON_MANUAL_DESPAWN);
+        if (!demolisher)
+            continue;
+
+        demolisher->SetFaction(bot->GetFaction());
+        bot->EnterVehicle(demolisher, 0);
+        if (bot->GetVehicle())
+        {
+            ++siegeCrews;
+            LOG_INFO("playerbots", "WG siege: {} mans a demolisher for the attack", bot->GetName());
+        }
+        else
+            demolisher->DespawnOrUnsummon();
     }
 
     if (count[TEAM_ALLIANCE] >= perSide && count[TEAM_HORDE] >= perSide)
