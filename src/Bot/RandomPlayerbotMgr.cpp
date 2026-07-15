@@ -1932,6 +1932,18 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         // Without this, the post-storm baseline is unbeatable and the storm becomes
         // a 90s teleport metronome for the whole boss fight. Distant combat (leash
         // wars in the void) still storms.
+        //
+        // Check the INSTANCE's own encounter flag first, not just per-bot IsInCombat():
+        // the encounter can be genuinely engaged for a beat before every bot's personal
+        // combat flag catches up, and storming into that gap hits the exact same
+        // CannotEnter/IsEncounterInProgress bounce as the medic and wipe-recovery paths.
+        InstanceScript* stallScript = leader->GetInstanceScript();
+        if (stallScript && stallScript->IsEncounterInProgress())
+        {
+            raidStallSince = time(nullptr);
+            return;
+        }
+
         if (distToObjective < 40.0f)
         {
             for (ObjectGuid const& guid : raidBots)
