@@ -28,6 +28,8 @@
 #include "LFGMgr.h"
 #include "BattlefieldMgr.h"
 #include "AiFactory.h"
+#include "InstanceScript.h"
+#include "LootMgr.h"
 #include <cmath>
 #include "Group.h"
 #include "GroupMgr.h"
@@ -1372,6 +1374,8 @@ namespace
         { 3511.4f, -3921.6f, 299.5f },  // Maexxna
     };
     constexpr uint32 NAXX_BOSS_ENTRIES[NAXX_OBJECTIVE_COUNT] = { 15956, 15953, 15952 };
+    // Instance-script encounter indices (naxxramas.h: BOSS_ANUB=6, BOSS_FAERLINA=7, BOSS_MAEXXNA=8)
+    constexpr uint32 NAXX_BOSS_STATE_INDEX[NAXX_OBJECTIVE_COUNT] = { 6, 7, 8 };
     char const* const NAXX_OBJECTIVE_NAMES[NAXX_OBJECTIVE_COUNT] = { "Anub'Rekhan", "Grand Widow Faerlina", "Maexxna" };
 }
 
@@ -1764,6 +1768,17 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
 
     if (!leader || present < 5)
     {
+        // Forensics: name exactly where every roster member ended up
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (!bot)
+                LOG_INFO("playerbots", "RAID EXP: forensics — {} missing from bot map (logged out)",
+                         guid.ToString());
+            else
+                LOG_INFO("playerbots", "RAID EXP: forensics — {} inWorld={} map={} zone={} alive={}",
+                         bot->GetName(), bot->IsInWorld(), bot->GetMapId(), bot->GetZoneId(), bot->IsAlive());
+        }
         releaseRaid("expedition dissolved (roster lost) — FAILED");
         return;
     }
@@ -1891,15 +1906,23 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             return;
     }
 
-    // Objective check: standing in the boss room with no living boss = cleared.
-    // The z-guard keeps "in the room" honest — walking the terrain shell UNDER a
-    // room satisfies 2D distance while the boss sits 60+ yards overhead
+    // Objective check: trust ONLY the instance script's own encounter journal.
+    // Proximity heuristics produced two false kills (2D under-floor credit, and an
+    // evade-window payout while the medic masked a slow-motion wipe)
     WgPoint const& obj = NAXX_OBJECTIVES[raidObjective];
-    if (leader->GetExactDist2d(obj.x, obj.y) < 30.0f && std::abs(leader->GetPositionZ() - obj.z) < 15.0f &&
-        !leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 60.0f))
+    InstanceScript* script = leader->GetInstanceScript();
+    if (script && script->GetBossState(NAXX_BOSS_STATE_INDEX[raidObjective]) == DONE)
     {
-        LOG_INFO("playerbots", "RAID EXP: {} CLEARED after {}s ({} wipes)", NAXX_OBJECTIVE_NAMES[raidObjective],
-                 time(nullptr) - raidBossStartTime, raidWipes);
+        LOG_INFO("playerbots", "RAID EXP: {} CLEARED after {}s ({} wipes) — encounter journal confirms",
+                 NAXX_OBJECTIVE_NAMES[raidObjective], time(nullptr) - raidBossStartTime, raidWipes);
+
+        // Spoils of war: crack the boss open before marching on; the bots' own
+        // loot-roll and auto-equip machinery handles distribution from here
+        if (Creature* corpse = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 100.0f, false))
+        {
+            leader->SendLoot(corpse->GetGUID(), LOOT_CORPSE);
+            LOG_INFO("playerbots", "RAID EXP: looting the corpse of {}", NAXX_OBJECTIVE_NAMES[raidObjective]);
+        }
         ++raidObjective;
         raidWipes = 0;
         raidStallSince = 0;
