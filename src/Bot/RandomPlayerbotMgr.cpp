@@ -26,6 +26,7 @@
 #include "FleeManager.h"
 #include "GridNotifiers.h"
 #include "LFGMgr.h"
+#include "BattlefieldMgr.h"
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
 #include "NewRpgStrategy.h"
@@ -388,6 +389,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
     {
         if (time(nullptr) > (LfgCheckTimer + 30))
             sRandomPlayerbotMgr.CheckLfgQueue();
+    }
+
+    if (sPlayerbotAIConfig.randomBotJoinWintergrasp)
+    {
+        // 5s cadence: war invites expire 20s after zone entry, so acceptance must be prompt
+        if (time(nullptr) > (WgCheckTimer + 5))
+            sRandomPlayerbotMgr.CheckWgQueue();
     }
 
     if (sPlayerbotAIConfig.randomBotAutologin && time(nullptr) > (printStatsTimer + 300))
@@ -1314,6 +1322,188 @@ void RandomPlayerbotMgr::CheckPlayers()
     LOG_INFO("playerbots", "Max player level is {}, max bot level set to {}", playersLevel - 3, playersLevel);
 }
 
+namespace
+{
+    struct WgPoint
+    {
+        float x, y, z;
+    };
+
+    // Canonical Wintergrasp positions (mirrors the WGGraveyard table in BattlefieldWG.h)
+    constexpr WgPoint WG_KEEP = { 5537.986f, 2897.493f, 517.057f };
+    constexpr WgPoint WG_HOTSPOTS[] = {
+        { 5104.750f, 2300.940f, 368.579f },  // workshop NE
+        { 5099.120f, 3466.036f, 368.484f },  // workshop NW
+        { 4314.648f, 2408.522f, 392.642f },  // workshop SE
+        { 4331.716f, 3235.695f, 390.251f },  // workshop SW
+        { 5537.986f, 2897.493f, 517.057f },  // fortress keep
+    };
+    constexpr WgPoint WG_CAMP[2] = {
+        { 5140.790f, 2179.120f, 390.950f },  // TEAM_ALLIANCE camp graveyard
+        { 5032.454f, 3711.382f, 372.468f },  // TEAM_HORDE camp graveyard
+    };
+    constexpr uint32 WG_ZONE_ID = 4197;
+    constexpr uint32 WG_MAP_ID = 571;
+}
+
+void RandomPlayerbotMgr::CheckWgQueue()
+{
+    WgCheckTimer = time(nullptr);
+
+    Battlefield* wg = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG);
+
+    // Heartbeat so a silent failure is diagnosable from the log
+    static time_t lastHeartbeat = 0;
+    if (time(nullptr) - lastHeartbeat >= 60)
+    {
+        lastHeartbeat = time(nullptr);
+        LOG_INFO("playerbots", "WG check: bf={} war={} conscripts={}", wg != nullptr,
+                 wg && wg->IsWarTime(), wgBots.size());
+    }
+
+    if (!wg)
+        return;
+
+    // Phase 1: bots only participate in active battles
+    if (!wg->IsWarTime())
+    {
+        if (!wgBots.empty())
+        {
+            // Battle ended: release conscripts back to normal bot life
+            for (ObjectGuid const& guid : wgBots)
+            {
+                if (Player* bot = GetPlayerBot(guid))
+                    if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                        botAI->ResetStrategies();
+            }
+            LOG_INFO("playerbots", "Wintergrasp: battle over, released {} bot conscripts", wgBots.size());
+            wgBots.clear();
+        }
+        return;
+    }
+
+    uint32 const minLevel = sWorld->getIntConfig(CONFIG_WINTERGRASP_PLR_MIN_LVL);
+    uint32 const perSide = sPlayerbotAIConfig.wintergraspBotsPerSide;
+
+    // Upkeep pass over current conscripts: accept pending war invites, issue march
+    // orders to idle troops, and drop bots that left the zone (died out, teleported, ...)
+    uint32 count[2] = { 0, 0 };
+    for (auto itr = wgBots.begin(); itr != wgBots.end();)
+    {
+        Player* bot = GetPlayerBot(*itr);
+        if (!bot)
+        {
+            itr = wgBots.erase(itr);
+            continue;
+        }
+
+        // Still arriving from the draft teleport: count as ours, let the port finish
+        if (bot->IsBeingTeleported())
+        {
+            ++count[bot->GetTeamId()];
+            ++itr;
+            continue;
+        }
+
+        if (!bot->IsInWorld() || bot->GetZoneId() != WG_ZONE_ID)
+        {
+            LOG_INFO("playerbots", "WG evict: {} inWorld={} map={} zone={} pos={:.0f},{:.0f}",
+                     bot->GetName(), bot->IsInWorld(), bot->GetMapId(), bot->GetZoneId(),
+                     bot->GetPositionX(), bot->GetPositionY());
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->ResetStrategies();
+            itr = wgBots.erase(itr);
+            continue;
+        }
+
+        TeamId team = bot->GetTeamId();
+        ++count[team];
+
+        // No-op unless the battlefield filed an invite for this bot on zone entry
+        wg->PlayerAcceptInviteToWar(bot);
+
+        // Insurance against the battlefield's 20s AFK kick sweep
+        if (bot->isAFK())
+            bot->ToggleAFK();
+
+        if (bot->IsAlive() && !bot->IsInCombat() && !bot->isMoving() && !bot->IsBeingTeleported())
+        {
+            // Attackers push the fortress, defenders split between keep and workshops
+            WgPoint const* target;
+            if (team == wg->GetAttackerTeam() && urand(0, 99) < 60)
+                target = &WG_KEEP;
+            else
+                target = &WG_HOTSPOTS[urand(0, std::size(WG_HOTSPOTS) - 1)];
+
+            float x = target->x + frand(-12.0f, 12.0f);
+            float y = target->y + frand(-12.0f, 12.0f);
+            bot->GetMotionMaster()->MovePoint(0, x, y, target->z);
+        }
+
+        ++itr;
+    }
+
+    if (count[TEAM_ALLIANCE] >= perSide && count[TEAM_HORDE] >= perSide)
+        return;
+
+    // Conscription pass: draft eligible random bots to fill both armies
+    for (PlayerBotMap::const_iterator it = GetPlayerBotsBegin(); it != GetPlayerBotsEnd(); ++it)
+    {
+        if (count[TEAM_ALLIANCE] >= perSide && count[TEAM_HORDE] >= perSide)
+            break;
+
+        Player* bot = it->second;
+        if (!bot || !bot->IsInWorld())
+            continue;
+
+        TeamId team = bot->GetTeamId();
+        if (count[team] >= perSide)
+            continue;
+
+        if (bot->GetLevel() < minLevel || !bot->IsAlive() || bot->IsInCombat() || bot->IsBeingTeleported() ||
+            bot->InBattleground() || bot->InBattlegroundQueue() || bot->InArena() || bot->GetGroup())
+            continue;
+
+        if (bot->GetZoneId() == WG_ZONE_ID || wgBots.count(bot->GetGUID()))
+            continue;
+
+        if (!IsRandomBot(bot))
+            continue;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI || botAI->HasActivePlayerMaster())
+            continue;
+
+        if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
+            continue;
+
+        // Enlist BEFORE shipping out: file the war invite and accept it in the same
+        // pass, so the manager's slow cadence can never race the 20s invite expiry.
+        wg->InvitePlayerToWar(bot);
+        wg->PlayerAcceptInviteToWar(bot);
+
+        WgPoint const& camp = WG_CAMP[team];
+        float x = camp.x + frand(-10.0f, 10.0f);
+        float y = camp.y + frand(-10.0f, 10.0f);
+        if (bot->TeleportTo(WG_MAP_ID, x, y, camp.z + 0.5f, 0.0f))
+        {
+            // Throttled bots can sit on an unacked teleport for minutes; complete it now
+            if (bot->IsBeingTeleported())
+                botAI->HandleTeleportAck();
+
+            LOG_INFO("playerbots", "WG draft: {} post-ack map={} zone={} beingTeleported={} pos={:.0f},{:.0f}",
+                     bot->GetName(), bot->GetMapId(), bot->GetZoneId(), bot->IsBeingTeleported(),
+                     bot->GetPositionX(), bot->GetPositionY());
+
+            botAI->ChangeStrategy("-travel,-rpg,-grind,+stay", BOT_STATE_NON_COMBAT);
+            wgBots.insert(bot->GetGUID());
+            ++count[team];
+            LOG_INFO("playerbots", "Wintergrasp: conscripted {} ({}, level {})", bot->GetName(),
+                     team == TEAM_ALLIANCE ? "Alliance" : "Horde", bot->GetLevel());
+        }
+    }
+}
+
 void RandomPlayerbotMgr::ScheduleRandomize(uint32 bot, uint32 time) { SetEventValue(bot, "randomize", 1, time); }
 
 void RandomPlayerbotMgr::ScheduleTeleport(uint32 bot, uint32 time)
@@ -1481,9 +1671,11 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         return false;
     }
 
-    // leave group if leader is rndbot
+    // leave group if leader is rndbot (never quit battleground/battlefield raids —
+    // leaving those mid-battle gets the bot ejected from the fight)
     Group* group = bot->GetGroup();
-    if (group && !group->isLFGGroup() && IsRandomBot(group->GetLeader()))
+    if (group && !group->isLFGGroup() && !group->isBGGroup() && !group->isBFGroup() &&
+        IsRandomBot(group->GetLeader()))
     {
         botAI->LeaveOrDisbandGroup();
         LOG_INFO("playerbots", "Bot {} remove from group since leader is random bot.", bot->GetName().c_str());
@@ -1577,6 +1769,10 @@ void RandomPlayerbotMgr::Revive(Player* player)
 
 void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth)
 {
+    // Conscripted Wintergrasp soldiers stay on the battlefield until released
+    if (!wgBots.empty() && wgBots.count(bot->GetGUID()))
+        return;
+
     // ignore when alrdy teleported or not in the world yet.
     if (bot->IsBeingTeleported() || !bot->IsInWorld())
         return;

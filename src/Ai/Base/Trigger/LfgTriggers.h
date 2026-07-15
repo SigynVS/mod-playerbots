@@ -27,4 +27,12 @@ public:
     bool IsActive() override;
 };
 
+class LfgStuckOutsideDungeonTrigger : public Trigger
+{
+public:
+    LfgStuckOutsideDungeonTrigger(PlayerbotAI* botAI) : Trigger(botAI, "lfg stuck outside dungeon", 10 * 1000) {}
+
+    bool IsActive() override;
+};
+
 #endif

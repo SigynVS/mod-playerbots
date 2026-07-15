@@ -1526,7 +1526,10 @@ void PlayerbotAI::DoNextAction(bool min)
 
     if (minimal)
     {
-        if (!bot->isAFK() && !bot->InBattleground() && !HasRealPlayerMaster())
+        // Never go AFK inside a battlefield war (e.g. Wintergrasp) — the battlefield
+        // kicks AFK participants every 20s, which would eject bot soldiers mid-battle
+        bool const inBattlefieldWar = bot->GetGroup() && bot->GetGroup()->isBFGroup();
+        if (!bot->isAFK() && !bot->InBattleground() && !inBattlefieldWar && !HasRealPlayerMaster())
             bot->ToggleAFK();
 
         SetNextCheckDelay(sPlayerbotAIConfig.passiveDelay);

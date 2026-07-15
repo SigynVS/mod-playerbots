@@ -238,6 +238,8 @@ public:
 
     bool randomBotJoinBG;
     bool randomBotAutoJoinBG;
+    bool randomBotJoinWintergrasp;
+    uint32 wintergraspBotsPerSide;
 
     std::string randomBotAutoJoinICBrackets;
     std::string randomBotAutoJoinEYBrackets;

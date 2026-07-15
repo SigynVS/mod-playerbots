@@ -164,6 +164,7 @@ public:
         creators["lfg proposal active"] = &TriggerContext::lfg_proposal_active;
 
         creators["unknown dungeon"] = &TriggerContext::unknown_dungeon;
+        creators["lfg stuck outside dungeon"] = &TriggerContext::lfg_stuck_outside_dungeon;
 
         creators["random bot update"] = &TriggerContext::random_bot_update_trigger;
         creators["no non bot players around"] = &TriggerContext::no_non_bot_players_around;
@@ -263,6 +264,7 @@ private:
     static Trigger* collision(PlayerbotAI* botAI) { return new CollisionTrigger(botAI); }
     static Trigger* lfg_proposal_active(PlayerbotAI* botAI) { return new LfgProposalActiveTrigger(botAI); }
     static Trigger* unknown_dungeon(PlayerbotAI* botAI) { return new UnknownDungeonTrigger(botAI); }
+    static Trigger* lfg_stuck_outside_dungeon(PlayerbotAI* botAI) { return new LfgStuckOutsideDungeonTrigger(botAI); }
     static Trigger* invalid_target(PlayerbotAI* botAI) { return new InvalidTargetTrigger(botAI); }
     static Trigger* critical_aoe_heal(PlayerbotAI* botAI)
     {
