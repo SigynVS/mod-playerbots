@@ -1863,9 +1863,16 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         return;
     }
 
-    // Full wipe: regroup at the entrance and try again, up to a limit
+    // Full wipe: regroup at the entrance and try again, up to a limit.
+    // Same gate as the medic raise: the encounter can still read "in progress"
+    // for a beat after the last death, and teleporting the whole roster into
+    // that window bounces all ten at once — the mass version of the ejection bug.
     if (alive == 0)
     {
+        InstanceScript* wipeScript = leader->GetInstanceScript();
+        if (wipeScript && wipeScript->IsEncounterInProgress())
+            return;  // wait for the boss to fully reset before regrouping
+
         ++raidWipes;
         raidStallSince = 0;
         LOG_INFO("playerbots", "RAID EXP: WIPE #{} at {}", raidWipes, NAXX_OBJECTIVE_NAMES[raidObjective]);
