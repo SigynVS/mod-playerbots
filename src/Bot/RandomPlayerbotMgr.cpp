@@ -1772,17 +1772,24 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         }
         if (bot->IsInWorld() && bot->GetMapId() != NAXX_MAP_ID && !bot->IsBeingTeleported())
         {
-            // Caught at the moment of loss, with the state that explains it
-            Group* g = bot->GetGroup();
-            InstancePlayerBind* ownBind =
-                sInstanceSaveMgr->PlayerGetBoundInstance(bot->GetGUID(), NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL);
+            // Caught at the moment of loss, with the state that explains it.
+            // Log once per bot, not every 10s pass spent waiting for a lull —
+            // "attempts" only counts REAL teleport attempts below, so check
+            // first-sight separately or every wait-cycle would re-log at 0.
+            bool const alreadySeen = raidReinsertions.count(bot->GetGUID()) != 0;
             uint8& attempts = raidReinsertions[bot->GetGUID()];
-            LOG_INFO("playerbots",
-                     "RAID EXP: ejection alert — {} expelled to map={} zone={} alive={} group={} members={} "
-                     "ownBind={} reinsertion={}",
-                     bot->GetName(), bot->GetMapId(), bot->GetZoneId(), bot->IsAlive(),
-                     g ? (g->isRaidGroup() ? "raid" : "party") : "NONE", g ? g->GetMembersCount() : 0,
-                     ownBind ? "yes" : "NO", attempts + 1);
+            if (!alreadySeen)
+            {
+                Group* g = bot->GetGroup();
+                InstancePlayerBind* ownBind = sInstanceSaveMgr->PlayerGetBoundInstance(
+                    bot->GetGUID(), NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL);
+                LOG_INFO("playerbots",
+                         "RAID EXP: ejection alert — {} expelled to map={} zone={} alive={} group={} members={} "
+                         "ownBind={}",
+                         bot->GetName(), bot->GetMapId(), bot->GetZoneId(), bot->IsAlive(),
+                         g ? (g->isRaidGroup() ? "raid" : "party") : "NONE", g ? g->GetMembersCount() : 0,
+                         ownBind ? "yes" : "NO");
+            }
 
             // Stubbornness protocol: shove them straight back in, up to five REAL
             // attempts each. Re-entry is legitimately refused while an encounter is
@@ -2028,6 +2035,22 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         Player* bot = GetPlayerBot(guid);
         if (bot && bot->IsInWorld() && bot->IsInCombat())
             return;
+    }
+
+    // Nobody's personal combat flag is set — soldiers standing at attention with no
+    // order to fire. Force the pull: without a real player master, raid AI never
+    // self-initiates on a boss it's simply standing near (the marathon "camping
+    // beside the boss" stalemate from earlier sessions). If we're in range, attack.
+    if (Creature* pullTarget = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 15.0f, true))
+    {
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (bot && bot->IsInWorld() && bot->IsAlive() && bot->GetMapId() == NAXX_MAP_ID)
+                bot->Attack(pullTarget, true);
+        }
+        LOG_INFO("playerbots", "RAID EXP: forcing the pull on {}", NAXX_OBJECTIVE_NAMES[raidObjective]);
+        return;
     }
 
     // Objective check: trust ONLY the instance script's own encounter journal.
