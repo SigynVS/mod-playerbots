@@ -15,10 +15,16 @@
 #include "ServerFacade.h"
 #include "Corpse.h"
 #include "Log.h"
+#include "RandomPlayerbotMgr.h"
 
 // ReleaseSpiritAction implementation
 bool ReleaseSpiritAction::Execute(Event event)
 {
+    // Raid-expedition members never release: ghosting out of the instance dissolves
+    // the raid, and the expedition medic raises them in place anyway
+    if (sRandomPlayerbotMgr.IsRaidExpeditionBot(bot->GetGUID()))
+        return false;
+
     if (bot->IsAlive())
     {
         if (!bot->InBattleground())

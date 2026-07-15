@@ -365,6 +365,7 @@ bool PlayerbotAIConfig::Initialize()
     randomBotJoinWintergrasp = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotJoinWintergrasp", false);
     wintergraspBotsPerSide = sConfigMgr->GetOption<uint32>("AiPlayerbot.WintergraspBotsPerSide", 25);
     wintergraspSiegeCrewCount = sConfigMgr->GetOption<uint32>("AiPlayerbot.WintergraspSiegeCrewCount", 3);
+    raidExpeditionEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.RaidExpeditionEnabled", false);
 
     randomBotAutoJoinArenaBracket = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotAutoJoinArenaBracket", 14);
 

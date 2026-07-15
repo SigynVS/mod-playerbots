@@ -27,6 +27,10 @@
 #include "GridNotifiers.h"
 #include "LFGMgr.h"
 #include "BattlefieldMgr.h"
+#include "AiFactory.h"
+#include <cmath>
+#include "Group.h"
+#include "GroupMgr.h"
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
 #include "NewRpgStrategy.h"
@@ -396,6 +400,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
         // 5s cadence: war invites expire 20s after zone entry, so acceptance must be prompt
         if (time(nullptr) > (WgCheckTimer + 5))
             sRandomPlayerbotMgr.CheckWgQueue();
+    }
+
+    if (sPlayerbotAIConfig.raidExpeditionEnabled)
+    {
+        if (time(nullptr) > (RaidExpCheckTimer + 10))
+            sRandomPlayerbotMgr.CheckRaidExpedition();
     }
 
     if (sPlayerbotAIConfig.randomBotAutologin && time(nullptr) > (printStatsTimer + 300))
@@ -1350,6 +1360,19 @@ namespace
     constexpr uint32 WG_SPELL_HURL_BOULDER = 50896;
     constexpr WgPoint WG_GATE = { 5162.99f, 2841.23f, 410.16f };     // GO 190375
     constexpr WgPoint WG_SIEGE_POST = { 5105.0f, 2841.0f, 403.0f };  // bombardment range, south of gate
+
+    // Raid expedition: a bot-only 10-man attempts the Naxxramas Spider Wing
+    constexpr uint32 NAXX_MAP_ID = 533;
+    constexpr WgPoint NAXX_ENTRANCE = { 3005.7f, -3447.8f, 293.9f };
+    constexpr WgPoint DALARAN_DROPOFF = { 5809.55f, 587.94f, 660.94f };
+    constexpr uint8 NAXX_OBJECTIVE_COUNT = 3;
+    constexpr WgPoint NAXX_OBJECTIVES[NAXX_OBJECTIVE_COUNT] = {
+        { 3308.6f, -3476.3f, 287.2f },  // Anub'Rekhan
+        { 3353.2f, -3620.1f, 261.1f },  // Grand Widow Faerlina
+        { 3511.4f, -3921.6f, 299.5f },  // Maexxna
+    };
+    constexpr uint32 NAXX_BOSS_ENTRIES[NAXX_OBJECTIVE_COUNT] = { 15956, 15953, 15952 };
+    char const* const NAXX_OBJECTIVE_NAMES[NAXX_OBJECTIVE_COUNT] = { "Anub'Rekhan", "Grand Widow Faerlina", "Maexxna" };
 }
 
 void RandomPlayerbotMgr::CheckWgQueue()
@@ -1569,6 +1592,317 @@ void RandomPlayerbotMgr::CheckWgQueue()
     }
 }
 
+void RandomPlayerbotMgr::CheckRaidExpedition()
+{
+    RaidExpCheckTimer = time(nullptr);
+
+    if (raidState == 2)
+        return;
+
+    auto releaseRaid = [this](char const* verdict)
+    {
+        LOG_INFO("playerbots", "RAID EXP: {}", verdict);
+        if (Player* leader = GetPlayerBot(raidLeader))
+            if (Group* group = leader->GetGroup())
+                group->Disband(true);
+
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (!bot)
+                continue;
+            if (!bot->IsAlive())
+            {
+                bot->ResurrectPlayer(1.0f);
+                bot->SpawnCorpseBones();
+            }
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->ResetStrategies();
+            bot->TeleportTo(571, DALARAN_DROPOFF.x + frand(-5.0f, 5.0f), DALARAN_DROPOFF.y + frand(-5.0f, 5.0f),
+                            DALARAN_DROPOFF.z, 0.0f);
+        }
+        raidBots.clear();
+        raidLeader.Clear();
+        raidState = 2;
+    };
+
+    // ---- Muster phase ----
+    if (raidState == 0)
+    {
+        // Let the population ramp before recruiting specialists
+        if (GameTime::GetUptime().count() < 240)
+            return;
+
+        struct Candidate
+        {
+            Player* bot;
+            uint32 score;
+        };
+        std::vector<Candidate> tanks, heals, dps;
+
+        for (PlayerBotMap::const_iterator it = GetPlayerBotsBegin(); it != GetPlayerBotsEnd(); ++it)
+        {
+            Player* bot = it->second;
+            if (!bot || !bot->IsInWorld() || bot->GetLevel() != 80 || !bot->IsAlive() || bot->IsInCombat() ||
+                bot->GetGroup() || bot->InBattleground() || bot->InBattlegroundQueue() || bot->IsBeingTeleported() ||
+                bot->GetMap()->Instanceable() || !IsRandomBot(bot))
+                continue;
+
+            if (bot->GetZoneId() == WG_ZONE_ID || wgBots.count(bot->GetGUID()))
+                continue;
+
+            PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+            if (!botAI || botAI->HasActivePlayerMaster())
+                continue;
+
+            if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
+                continue;
+
+            uint8 spec = AiFactory::GetPlayerSpecTab(bot);
+            uint8 cls = bot->getClass();
+            uint32 score = botAI->GetEquipGearScore(bot);
+
+            bool isTank = (cls == CLASS_WARRIOR && spec == 2) || (cls == CLASS_DEATH_KNIGHT && spec == 0) ||
+                          (cls == CLASS_PALADIN && spec == 1);
+            bool isHeal = (cls == CLASS_PRIEST && spec != 2) || (cls == CLASS_PALADIN && spec == 0) ||
+                          (cls == CLASS_SHAMAN && spec == 2) || (cls == CLASS_DRUID && spec == 2);
+
+            if (isTank)
+                tanks.push_back({ bot, score });
+            else if (isHeal)
+                heals.push_back({ bot, score });
+            else
+                dps.push_back({ bot, score });
+        }
+
+        if (tanks.size() < 2 || heals.size() < 3 || dps.size() < 5)
+            return;  // not enough specialists online yet; try again next pass
+
+        auto byScore = [](Candidate const& a, Candidate const& b) { return a.score > b.score; };
+        std::sort(tanks.begin(), tanks.end(), byScore);
+        std::sort(heals.begin(), heals.end(), byScore);
+        std::sort(dps.begin(), dps.end(), byScore);
+
+        std::vector<Player*> roster;
+        for (int i = 0; i < 2; ++i)
+            roster.push_back(tanks[i].bot);
+        for (int i = 0; i < 3; ++i)
+            roster.push_back(heals[i].bot);
+        for (int i = 0; i < 5; ++i)
+            roster.push_back(dps[i].bot);
+
+        Player* leader = roster[0];
+        Group* group = new Group();
+        if (!group->Create(leader))
+        {
+            delete group;
+            return;
+        }
+        sGroupMgr->AddGroup(group);
+        for (size_t i = 1; i < roster.size(); ++i)
+            group->AddMember(roster[i]);
+        group->ConvertToRaid();
+
+        raidBots.clear();
+        for (Player* bot : roster)
+        {
+            PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+            if (botAI)
+                botAI->ChangeStrategy("-travel,-rpg,-grind,+stay", BOT_STATE_NON_COMBAT);
+
+            bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
+                            NAXX_ENTRANCE.z, 0.0f);
+            if (bot->IsBeingTeleported() && botAI)
+                botAI->HandleTeleportAck();
+
+            raidBots.insert(bot->GetGUID());
+            LOG_INFO("playerbots", "RAID EXP: drafted {} (class {}, GS {})", bot->GetName(), bot->getClass(),
+                     botAI ? botAI->GetEquipGearScore(bot) : 0);
+        }
+
+        raidLeader = leader->GetGUID();
+        raidObjective = 0;
+        raidWipes = 0;
+        raidState = 1;
+        raidBossStartTime = time(nullptr);
+        LOG_INFO("playerbots", "RAID EXP: 10 bots inserted into Naxxramas — Spider Wing expedition begins");
+        return;
+    }
+
+    // ---- Progress phase ----
+    Player* leader = GetPlayerBot(raidLeader);
+
+    uint32 present = 0, alive = 0;
+    for (ObjectGuid const& guid : raidBots)
+    {
+        Player* bot = GetPlayerBot(guid);
+        if (!bot || !bot->IsInWorld() || bot->GetMapId() != NAXX_MAP_ID)
+            continue;
+        ++present;
+        if (bot->IsAlive())
+            ++alive;
+        if (bot->isAFK())
+            bot->ToggleAFK();
+    }
+
+    // Leader lost (died and slipped out, or despawned): promote a survivor instead of dissolving
+    if (!leader || !leader->IsInWorld() || leader->GetMapId() != NAXX_MAP_ID)
+    {
+        leader = nullptr;
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (bot && bot->IsInWorld() && bot->GetMapId() == NAXX_MAP_ID)
+            {
+                leader = bot;
+                raidLeader = guid;
+                LOG_INFO("playerbots", "RAID EXP: field promotion — {} now leads the expedition", bot->GetName());
+                break;
+            }
+        }
+    }
+
+    if (!leader || present < 5)
+    {
+        releaseRaid("expedition dissolved (roster lost) — FAILED");
+        return;
+    }
+
+    // Full wipe: regroup at the entrance and try again, up to a limit
+    if (alive == 0)
+    {
+        ++raidWipes;
+        raidStallSince = 0;
+        LOG_INFO("playerbots", "RAID EXP: WIPE #{} at {}", raidWipes, NAXX_OBJECTIVE_NAMES[raidObjective]);
+        if (raidWipes >= 4)
+        {
+            releaseRaid("expedition FAILED — four wipes, calling it");
+            return;
+        }
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (!bot || !bot->IsInWorld())
+                continue;
+            bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
+                            NAXX_ENTRANCE.z, 0.0f);
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                if (bot->IsBeingTeleported())
+                    botAI->HandleTeleportAck();
+            bot->ResurrectPlayer(0.7f);
+            bot->SpawnCorpseBones();
+        }
+        return;
+    }
+
+    // Status heartbeat for diagnosability
+    static time_t lastRaidHeartbeat = 0;
+    if (time(nullptr) - lastRaidHeartbeat >= 60)
+    {
+        lastRaidHeartbeat = time(nullptr);
+        LOG_INFO("playerbots", "RAID EXP: status objective={} alive={}/{} leader at {:.0f},{:.0f}",
+                 NAXX_OBJECTIVE_NAMES[raidObjective], alive, present, leader->GetPositionX(),
+                 leader->GetPositionY());
+    }
+
+    // Stall breaker, progress-based: if the raid gets no CLOSER to the objective for 90s —
+    // whether standing at a locked door or hiking the void in the wrong direction —
+    // the manager storms the living roster straight onto the objective (tight scatter:
+    // Naxx rooms float over a terrain shell and wide scatter drops bots off the floor)
+    float const distToObjective =
+        leader->GetExactDist2d(NAXX_OBJECTIVES[raidObjective].x, NAXX_OBJECTIVES[raidObjective].y);
+    if (raidStallSince == 0 || distToObjective < raidBestDist - 5.0f)
+    {
+        raidBestDist = distToObjective;
+        raidStallSince = time(nullptr);
+    }
+    else if (time(nullptr) - raidStallSince > 90)
+    {
+        WgPoint const& storm = NAXX_OBJECTIVES[raidObjective];
+        LOG_INFO("playerbots", "RAID EXP: no progress toward {} in 90s — storming it directly",
+                 NAXX_OBJECTIVE_NAMES[raidObjective]);
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
+                continue;
+            bot->TeleportTo(NAXX_MAP_ID, storm.x + frand(-3.0f, 3.0f), storm.y + frand(-3.0f, 3.0f), storm.z, 0.0f);
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                if (bot->IsBeingTeleported())
+                    botAI->HandleTeleportAck();
+        }
+        raidBestDist = 5.0f;
+        raidStallSince = time(nullptr);
+        return;
+    }
+
+    // Field medics: raise the fallen at a living anchor EVERY pass — raising at the
+    // corpse feeds the same pack, and bots left dead ghost out via spirit release
+    Player* anchor = nullptr;
+    for (ObjectGuid const& guid : raidBots)
+    {
+        Player* bot = GetPlayerBot(guid);
+        if (bot && bot->IsInWorld() && bot->IsAlive() && bot->GetMapId() == NAXX_MAP_ID)
+        {
+            anchor = bot;
+            break;
+        }
+    }
+    if (anchor)
+    {
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (!bot || !bot->IsInWorld() || bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
+                continue;
+            bot->TeleportTo(NAXX_MAP_ID, anchor->GetPositionX() + frand(-3.0f, 3.0f),
+                            anchor->GetPositionY() + frand(-3.0f, 3.0f), anchor->GetPositionZ(), 0.0f);
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                if (bot->IsBeingTeleported())
+                    botAI->HandleTeleportAck();
+            bot->ResurrectPlayer(0.7f);
+            bot->SpawnCorpseBones();
+            LOG_INFO("playerbots", "RAID EXP: field-raised {} at the anchor", bot->GetName());
+        }
+    }
+
+    // While the raid AI is fighting, stay out of the way
+    for (ObjectGuid const& guid : raidBots)
+    {
+        Player* bot = GetPlayerBot(guid);
+        if (bot && bot->IsInWorld() && bot->IsInCombat())
+            return;
+    }
+
+    // Objective check: standing in the boss room with no living boss = cleared.
+    // The z-guard keeps "in the room" honest — walking the terrain shell UNDER a
+    // room satisfies 2D distance while the boss sits 60+ yards overhead
+    WgPoint const& obj = NAXX_OBJECTIVES[raidObjective];
+    if (leader->GetExactDist2d(obj.x, obj.y) < 30.0f && std::abs(leader->GetPositionZ() - obj.z) < 15.0f &&
+        !leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 60.0f))
+    {
+        LOG_INFO("playerbots", "RAID EXP: {} CLEARED after {}s ({} wipes)", NAXX_OBJECTIVE_NAMES[raidObjective],
+                 time(nullptr) - raidBossStartTime, raidWipes);
+        ++raidObjective;
+        raidWipes = 0;
+        raidStallSince = 0;
+        raidBossStartTime = time(nullptr);
+
+        if (raidObjective >= NAXX_OBJECTIVE_COUNT)
+            releaseRaid("SPIDER WING CLEARED — bot-only raid SUCCESS, releasing the champions to Dalaran");
+        return;
+    }
+
+    // March order: idle raiders advance on the objective
+    for (ObjectGuid const& guid : raidBots)
+    {
+        Player* bot = GetPlayerBot(guid);
+        if (bot && bot->IsInWorld() && bot->IsAlive() && !bot->isMoving() && !bot->IsInCombat() &&
+            !bot->IsBeingTeleported())
+            bot->GetMotionMaster()->MovePoint(0, obj.x + frand(-6.0f, 6.0f), obj.y + frand(-6.0f, 6.0f), obj.z);
+    }
+}
+
 void RandomPlayerbotMgr::ScheduleRandomize(uint32 bot, uint32 time) { SetEventValue(bot, "randomize", 1, time); }
 
 void RandomPlayerbotMgr::ScheduleTeleport(uint32 bot, uint32 time)
@@ -1686,6 +2020,10 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
     uint32 logout = GetEventValue(bot, "logout");
     if (player && !logout && !isValid)
     {
+        // Wintergrasp conscripts and raid expedition members don't clock out mid-mission
+        if (raidBots.count(botGUID) || wgBots.count(botGUID))
+            return false;
+
         LOG_DEBUG("playerbots", "Bot #{} {}:{} <{}>: log out", bot, IsAlliance(player->getRace()) ? "A" : "H",
                   player->GetLevel(), player->GetName().c_str());
         LogoutPlayerBot(botGUID);
@@ -1737,10 +2075,10 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
     }
 
     // leave group if leader is rndbot (never quit battleground/battlefield raids —
-    // leaving those mid-battle gets the bot ejected from the fight)
+    // leaving those mid-battle gets the bot ejected from the fight — nor raid expeditions)
     Group* group = bot->GetGroup();
     if (group && !group->isLFGGroup() && !group->isBGGroup() && !group->isBFGroup() &&
-        IsRandomBot(group->GetLeader()))
+        !raidBots.count(bot->GetGUID()) && IsRandomBot(group->GetLeader()))
     {
         botAI->LeaveOrDisbandGroup();
         LOG_INFO("playerbots", "Bot {} remove from group since leader is random bot.", bot->GetName().c_str());

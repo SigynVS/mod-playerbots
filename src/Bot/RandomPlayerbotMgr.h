@@ -153,6 +153,8 @@ public:
     void CheckBgQueue();
     void CheckLfgQueue();
     void CheckWgQueue();
+    void CheckRaidExpedition();
+    bool IsRaidExpeditionBot(ObjectGuid const& guid) const { return raidBots.count(guid) != 0; }
     void CheckPlayers();
     void LogBattlegroundInfo();
 
@@ -205,6 +207,13 @@ private:
         this->BgCheckTimer = 0;
         this->LfgCheckTimer = 0;
         this->WgCheckTimer = 0;
+        this->RaidExpCheckTimer = 0;
+        this->raidState = 0;
+        this->raidObjective = 0;
+        this->raidWipes = 0;
+        this->raidBossStartTime = 0;
+        this->raidBestDist = 0.0f;
+        this->raidStallSince = 0;
         this->PlayersCheckTimer = 0;
     }
 
@@ -233,6 +242,15 @@ private:
     time_t LfgCheckTimer;
     time_t WgCheckTimer;
     std::unordered_set<ObjectGuid> wgBots;
+    time_t RaidExpCheckTimer;
+    std::unordered_set<ObjectGuid> raidBots;
+    ObjectGuid raidLeader;
+    uint8 raidState;      // 0 = waiting to muster, 1 = expedition running, 2 = concluded
+    uint8 raidObjective;
+    uint8 raidWipes;
+    time_t raidBossStartTime;
+    float raidBestDist;
+    time_t raidStallSince;
     time_t PlayersCheckTimer;
     time_t RealPlayerLastTimeSeen = 0;
     time_t DelayLoginBotsTimer;

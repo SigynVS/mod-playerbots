@@ -241,6 +241,7 @@ public:
     bool randomBotJoinWintergrasp;
     uint32 wintergraspBotsPerSide;
     uint32 wintergraspSiegeCrewCount;
+    bool raidExpeditionEnabled;
 
     std::string randomBotAutoJoinICBrackets;
     std::string randomBotAutoJoinEYBrackets;
