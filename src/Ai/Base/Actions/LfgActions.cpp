@@ -312,6 +312,12 @@ bool LfgJoinAction::isUseful()
         return false;
     }
 
+    // Raid expedition members and Wintergrasp conscripts don't answer the
+    // Dungeon Finder mid-mission (LFG was poaching expedition leaders — the
+    // only members who pass the group-leader check below)
+    if (RandomPlayerbotMgr::instance().IsRaidExpeditionBot(bot->GetGUID()))
+        return false;
+
     if (bot->GetLevel() < 15)
         return false;
 

@@ -251,6 +251,7 @@ private:
     time_t raidBossStartTime;
     float raidBestDist;
     time_t raidStallSince;
+    std::map<ObjectGuid, uint8> raidReinsertions;
     time_t PlayersCheckTimer;
     time_t RealPlayerLastTimeSeen = 0;
     time_t DelayLoginBotsTimer;

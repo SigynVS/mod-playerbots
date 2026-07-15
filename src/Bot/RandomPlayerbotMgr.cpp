@@ -29,6 +29,7 @@
 #include "BattlefieldMgr.h"
 #include "AiFactory.h"
 #include "InstanceScript.h"
+#include "InstanceSaveMgr.h"
 #include "LootMgr.h"
 #include <cmath>
 #include "Group.h"
@@ -1579,6 +1580,8 @@ void RandomPlayerbotMgr::CheckWgQueue()
         float y = camp.y + frand(-10.0f, 10.0f);
         if (bot->TeleportTo(WG_MAP_ID, x, y, camp.z + 0.5f, 0.0f))
         {
+            botAI->ChangeStrategy("-lfg", BOT_STATE_NON_COMBAT);
+
             // Throttled bots can sit on an unacked teleport for minutes; complete it now
             if (bot->IsBeingTeleported())
                 botAI->HandleTeleportAck();
@@ -1703,16 +1706,36 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             return;
         }
         sGroupMgr->AddGroup(group);
-        for (size_t i = 1; i < roster.size(); ++i)
-            group->AddMember(roster[i]);
+        // Convert BEFORE filling the ranks: Create() makes a 5-cap party, so adds 6-10
+        // were silently failing — half of every roster marched ungrouped, and the
+        // instance ejected the unbound to Dragonblight (the "Faerlina curse")
         group->ConvertToRaid();
+        bool musterFailed = false;
+        for (size_t i = 1; i < roster.size(); ++i)
+        {
+            if (!group->AddMember(roster[i]))
+            {
+                LOG_INFO("playerbots", "RAID EXP: muster failed — {} could not join the raid", roster[i]->GetName());
+                musterFailed = true;
+                break;
+            }
+        }
+        if (musterFailed)
+        {
+            group->Disband(true);
+            return;  // retry with a fresh pool next pass
+        }
 
         raidBots.clear();
         for (Player* bot : roster)
         {
+            // Virgin instance guarantee: wipe any old Naxx raid lock, or a veteran's
+            // bind drags the whole expedition into a used instance with dead bosses
+            sInstanceSaveMgr->PlayerUnbindInstance(bot->GetGUID(), NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL, true, bot);
+
             PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
             if (botAI)
-                botAI->ChangeStrategy("-travel,-rpg,-grind,+stay", BOT_STATE_NON_COMBAT);
+                botAI->ChangeStrategy("-travel,-rpg,-grind,-lfg,+stay", BOT_STATE_NON_COMBAT);
 
             bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
                             NAXX_ENTRANCE.z, 0.0f);
@@ -1737,21 +1760,78 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     Player* leader = GetPlayerBot(raidLeader);
 
     uint32 present = 0, alive = 0;
-    for (ObjectGuid const& guid : raidBots)
+    for (auto itr = raidBots.begin(); itr != raidBots.end();)
     {
-        Player* bot = GetPlayerBot(guid);
-        if (!bot || !bot->IsInWorld() || bot->GetMapId() != NAXX_MAP_ID)
+        Player* bot = GetPlayerBot(*itr);
+        if (!bot)
+        {
+            LOG_INFO("playerbots", "RAID EXP: ejection alert — {} gone from bot map (logout path)",
+                     itr->ToString());
+            itr = raidBots.erase(itr);
             continue;
-        ++present;
-        if (bot->IsAlive())
-            ++alive;
-        if (bot->isAFK())
-            bot->ToggleAFK();
+        }
+        if (bot->IsInWorld() && bot->GetMapId() != NAXX_MAP_ID && !bot->IsBeingTeleported())
+        {
+            // Caught at the moment of loss, with the state that explains it
+            Group* g = bot->GetGroup();
+            InstancePlayerBind* ownBind =
+                sInstanceSaveMgr->PlayerGetBoundInstance(bot->GetGUID(), NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL);
+            uint8& attempts = raidReinsertions[bot->GetGUID()];
+            LOG_INFO("playerbots",
+                     "RAID EXP: ejection alert — {} expelled to map={} zone={} alive={} group={} members={} "
+                     "ownBind={} reinsertion={}",
+                     bot->GetName(), bot->GetMapId(), bot->GetZoneId(), bot->IsAlive(),
+                     g ? (g->isRaidGroup() ? "raid" : "party") : "NONE", g ? g->GetMembersCount() : 0,
+                     ownBind ? "yes" : "NO", attempts + 1);
+
+            // Stubbornness protocol: shove them straight back in, up to five REAL
+            // attempts each. Re-entry is legitimately refused while an encounter is
+            // in progress (see the field-medic comment above) — retrying then would
+            // just burn the attempt budget on a guaranteed bounce, so wait for a lull.
+            InstanceScript* raidScript = leader ? leader->GetInstanceScript() : nullptr;
+            bool const combatLive = raidScript && raidScript->IsEncounterInProgress();
+            if (!combatLive && attempts < 5 && leader && leader->IsInWorld() && leader->GetMapId() == NAXX_MAP_ID)
+            {
+                ++attempts;
+                bot->TeleportTo(NAXX_MAP_ID, leader->GetPositionX() + frand(-4.0f, 4.0f),
+                                leader->GetPositionY() + frand(-4.0f, 4.0f), leader->GetPositionZ(), 0.0f);
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    if (bot->IsBeingTeleported())
+                        botAI->HandleTeleportAck();
+                ++itr;
+                continue;
+            }
+            if (combatLive)
+            {
+                ++itr;  // hold position outside, retry once the fight resolves
+                continue;
+            }
+
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->ResetStrategies();
+            itr = raidBots.erase(itr);
+            continue;
+        }
+        if (bot->IsInWorld() && bot->GetMapId() == NAXX_MAP_ID)
+        {
+            ++present;
+            if (bot->IsAlive())
+                ++alive;
+            if (bot->isAFK())
+                bot->ToggleAFK();
+        }
+        ++itr;
     }
 
     // Leader lost (died and slipped out, or despawned): promote a survivor instead of dissolving
     if (!leader || !leader->IsInWorld() || leader->GetMapId() != NAXX_MAP_ID)
     {
+        if (!leader)
+            LOG_INFO("playerbots", "RAID EXP: leader {} vanished from the bot map (logout)", raidLeader.ToString());
+        else
+            LOG_INFO("playerbots", "RAID EXP: leader {} displaced — inWorld={} map={} zone={} alive={}",
+                     leader->GetName(), leader->IsInWorld(), leader->GetMapId(), leader->GetZoneId(),
+                     leader->IsAlive());
         leader = nullptr;
         for (ObjectGuid const& guid : raidBots)
         {
@@ -1810,14 +1890,22 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         return;
     }
 
-    // Status heartbeat for diagnosability
+    // Status heartbeat for diagnosability, including group/bind integrity so a
+    // coming collapse shows its cause in the minute BEFORE it happens
     static time_t lastRaidHeartbeat = 0;
     if (time(nullptr) - lastRaidHeartbeat >= 60)
     {
         lastRaidHeartbeat = time(nullptr);
-        LOG_INFO("playerbots", "RAID EXP: status objective={} alive={}/{} leader at {:.0f},{:.0f}",
+        Group* g = leader->GetGroup();
+        uint32 bindCount = 0;
+        for (ObjectGuid const& guid : raidBots)
+            if (sInstanceSaveMgr->PlayerGetBoundInstance(guid, NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL))
+                ++bindCount;
+        LOG_INFO("playerbots",
+                 "RAID EXP: status objective={} alive={}/{} leader at {:.0f},{:.0f} group={} members={} binds={}/{}",
                  NAXX_OBJECTIVE_NAMES[raidObjective], alive, present, leader->GetPositionX(),
-                 leader->GetPositionY());
+                 leader->GetPositionY(), g ? (g->isRaidGroup() ? "raid" : "party") : "NONE",
+                 g ? g->GetMembersCount() : 0, bindCount, raidBots.size());
     }
 
     // Stall breaker, progress-based: if the raid gets no CLOSER to the objective for 90s —
@@ -1882,19 +1970,36 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     }
     if (anchor)
     {
+        // Root cause of the whole-night ejection mystery: teleporting a DEAD bot
+        // routes through the same "entering the instance" gate as a fresh login
+        // (InstanceMap::CannotEnter), which raids refuse while an encounter is in
+        // progress (TRANSFER_ABORT_ZONE_IN_COMBAT) — precisely when a raise matters
+        // most. The rejected transfer strands them at the instance's exterior entry
+        // point (Dragonblight), fully bound and grouped, looking like a phantom kick.
+        // Fix: raise IN PLACE during combat (no relocation, so no re-entry check);
+        // only teleport-regroup to the anchor when no encounter is active.
+        InstanceScript* raidScript = anchor->GetInstanceScript();
+        bool const combatLive = raidScript && raidScript->IsEncounterInProgress();
+
         for (ObjectGuid const& guid : raidBots)
         {
             Player* bot = GetPlayerBot(guid);
             if (!bot || !bot->IsInWorld() || bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
                 continue;
-            bot->TeleportTo(NAXX_MAP_ID, anchor->GetPositionX() + frand(-3.0f, 3.0f),
-                            anchor->GetPositionY() + frand(-3.0f, 3.0f), anchor->GetPositionZ(), 0.0f);
-            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-                if (bot->IsBeingTeleported())
-                    botAI->HandleTeleportAck();
+
+            if (!combatLive)
+            {
+                bot->TeleportTo(NAXX_MAP_ID, anchor->GetPositionX() + frand(-3.0f, 3.0f),
+                                anchor->GetPositionY() + frand(-3.0f, 3.0f), anchor->GetPositionZ(), 0.0f);
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    if (bot->IsBeingTeleported())
+                        botAI->HandleTeleportAck();
+            }
+
             bot->ResurrectPlayer(0.7f);
             bot->SpawnCorpseBones();
-            LOG_INFO("playerbots", "RAID EXP: field-raised {} at the anchor", bot->GetName());
+            LOG_INFO("playerbots", "RAID EXP: field-raised {} {}", bot->GetName(),
+                     combatLive ? "in place (encounter live)" : "at the anchor");
         }
     }
 
