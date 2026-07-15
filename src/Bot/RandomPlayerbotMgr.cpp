@@ -1818,6 +1818,23 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     }
     else if (time(nullptr) - raidStallSince > 90)
     {
+        // A raid actively fighting NEAR the objective is not stalled — it's raiding.
+        // Without this, the post-storm baseline is unbeatable and the storm becomes
+        // a 90s teleport metronome for the whole boss fight. Distant combat (leash
+        // wars in the void) still storms.
+        if (distToObjective < 40.0f)
+        {
+            for (ObjectGuid const& guid : raidBots)
+            {
+                Player* b = GetPlayerBot(guid);
+                if (b && b->IsInWorld() && b->IsInCombat())
+                {
+                    raidStallSince = time(nullptr);
+                    return;
+                }
+            }
+        }
+
         WgPoint const& storm = NAXX_OBJECTIVES[raidObjective];
         LOG_INFO("playerbots", "RAID EXP: no progress toward {} in 90s — storming it directly",
                  NAXX_OBJECTIVE_NAMES[raidObjective]);
@@ -2172,8 +2189,8 @@ void RandomPlayerbotMgr::Revive(Player* player)
 
 void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth)
 {
-    // Conscripted Wintergrasp soldiers stay on the battlefield until released
-    if (!wgBots.empty() && wgBots.count(bot->GetGUID()))
+    // Wintergrasp conscripts and raid expedition members stay on mission — no grind teleports
+    if (wgBots.count(bot->GetGUID()) || raidBots.count(bot->GetGUID()))
         return;
 
     // ignore when alrdy teleported or not in the world yet.
