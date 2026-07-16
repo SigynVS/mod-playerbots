@@ -1793,6 +1793,21 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     // ---- Progress phase ----
     Player* leader = GetPlayerBot(raidLeader);
 
+    // Ack any teleport still in flight, EVERY pass, for every raid bot — not just
+    // once, immediately after issuing a new TeleportTo(). Player::TeleportTo can
+    // DELAY a far-teleport (MustDelayTeleport()) rather than start it right away —
+    // common precisely when a bot is mid-action, i.e. mid-fight, exactly when these
+    // ejections cluster. The one-shot "if IsBeingTeleported() ack" check fires
+    // before the delayed transfer has actually begun, sees false, and never comes
+    // back — stranding the bot mid-transfer (inWorld=false) once it finally starts
+    // on some later tick nobody's watching. HandleTeleportAck() self-guards
+    // (checks IsBeingTeleportedFar/Near internally), so calling it unconditionally
+    // every pass is safe and catches the transfer whenever it actually starts.
+    for (ObjectGuid const& guid : raidBots)
+        if (Player* bot = GetPlayerBot(guid))
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->HandleTeleportAck();
+
     uint32 present = 0, alive = 0;
     for (auto itr = raidBots.begin(); itr != raidBots.end();)
     {
