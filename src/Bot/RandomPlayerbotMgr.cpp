@@ -1767,7 +1767,11 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             if (botAI)
                 botAI->ChangeStrategy("-travel,-rpg,-grind,-lfg,+stay", BOT_STATE_NON_COMBAT);
 
-            bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
+            // No Naxx Map* exists yet to verify floor before the first bot lands there,
+            // so this one relies on tight jitter rather than SafeLandingSpot's live
+            // check (unlike the other 4 jittered teleports below, all of which land
+            // on an ALREADY-populated Naxx map and get the floor-verified version).
+            bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-1.0f, 1.0f), NAXX_ENTRANCE.y + frand(-1.0f, 1.0f),
                             NAXX_ENTRANCE.z, 0.0f, TELE_TO_GM_MODE);
             if (bot->IsBeingTeleported() && botAI)
                 botAI->HandleTeleportAck();
@@ -1827,9 +1831,9 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             if (attempts < 5 && leader && leader->IsInWorld() && leader->GetMapId() == NAXX_MAP_ID)
             {
                 ++attempts;
-                bot->TeleportTo(NAXX_MAP_ID, leader->GetPositionX() + frand(-4.0f, 4.0f),
-                                leader->GetPositionY() + frand(-4.0f, 4.0f), leader->GetPositionZ(), 0.0f,
-                                TELE_TO_GM_MODE);
+                WgPoint landing = SafeLandingSpot(leader->GetMap(), leader->GetPositionX(), leader->GetPositionY(),
+                                                  leader->GetPositionZ(), 4.0f);
+                bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
                 if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                     if (bot->IsBeingTeleported())
                         botAI->HandleTeleportAck();
@@ -1911,8 +1915,8 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             Player* bot = GetPlayerBot(guid);
             if (!bot || !bot->IsInWorld())
                 continue;
-            bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
-                            NAXX_ENTRANCE.z, 0.0f, TELE_TO_GM_MODE);
+            WgPoint landing = SafeLandingSpot(bot->GetMap(), NAXX_ENTRANCE.x, NAXX_ENTRANCE.y, NAXX_ENTRANCE.z, 4.0f);
+            bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
