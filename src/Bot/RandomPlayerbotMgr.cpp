@@ -1738,7 +1738,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
                 botAI->ChangeStrategy("-travel,-rpg,-grind,-lfg,+stay", BOT_STATE_NON_COMBAT);
 
             bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
-                            NAXX_ENTRANCE.z, 0.0f);
+                            NAXX_ENTRANCE.z, 0.0f, TELE_TO_GM_MODE);
             if (bot->IsBeingTeleported() && botAI)
                 botAI->HandleTeleportAck();
 
@@ -1772,10 +1772,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         }
         if (bot->IsInWorld() && bot->GetMapId() != NAXX_MAP_ID && !bot->IsBeingTeleported())
         {
-            // Caught at the moment of loss, with the state that explains it.
-            // Log once per bot, not every 10s pass spent waiting for a lull —
-            // "attempts" only counts REAL teleport attempts below, so check
-            // first-sight separately or every wait-cycle would re-log at 0.
+            // Caught at the moment of loss, with the state that explains it. Log once.
             bool const alreadySeen = raidReinsertions.count(bot->GetGUID()) != 0;
             uint8& attempts = raidReinsertions[bot->GetGUID()];
             if (!alreadySeen)
@@ -1791,26 +1788,22 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
                          ownBind ? "yes" : "NO");
             }
 
-            // Stubbornness protocol: shove them straight back in, up to five REAL
-            // attempts each. Re-entry is legitimately refused while an encounter is
-            // in progress (see the field-medic comment above) — retrying then would
-            // just burn the attempt budget on a guaranteed bounce, so wait for a lull.
-            InstanceScript* raidScript = leader ? leader->GetInstanceScript() : nullptr;
-            bool const combatLive = raidScript && raidScript->IsEncounterInProgress();
-            if (!combatLive && attempts < 5 && leader && leader->IsInWorld() && leader->GetMapId() == NAXX_MAP_ID)
+            // Stubbornness protocol: shove them straight back in immediately.
+            // TELE_TO_GM_MODE bypasses InstanceMap::CannotEnter entirely (including
+            // the IsEncounterInProgress refusal) — this doesn't need to wait for a
+            // lull anymore; the whole "wait and hope" dance from v13 was working
+            // around a check this flag was built to skip. Still capped at five
+            // attempts as a sanity net against some other, unrelated failure mode.
+            if (attempts < 5 && leader && leader->IsInWorld() && leader->GetMapId() == NAXX_MAP_ID)
             {
                 ++attempts;
                 bot->TeleportTo(NAXX_MAP_ID, leader->GetPositionX() + frand(-4.0f, 4.0f),
-                                leader->GetPositionY() + frand(-4.0f, 4.0f), leader->GetPositionZ(), 0.0f);
+                                leader->GetPositionY() + frand(-4.0f, 4.0f), leader->GetPositionZ(), 0.0f,
+                                TELE_TO_GM_MODE);
                 if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                     if (bot->IsBeingTeleported())
                         botAI->HandleTeleportAck();
                 ++itr;
-                continue;
-            }
-            if (combatLive)
-            {
-                ++itr;  // hold position outside, retry once the fight resolves
                 continue;
             }
 
@@ -1871,15 +1864,10 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     }
 
     // Full wipe: regroup at the entrance and try again, up to a limit.
-    // Same gate as the medic raise: the encounter can still read "in progress"
-    // for a beat after the last death, and teleporting the whole roster into
-    // that window bounces all ten at once — the mass version of the ejection bug.
+    // TELE_TO_GM_MODE (below) bypasses the encounter-in-progress refusal that
+    // used to bounce this exact mass-teleport, so no need to wait for a reset.
     if (alive == 0)
     {
-        InstanceScript* wipeScript = leader->GetInstanceScript();
-        if (wipeScript && wipeScript->IsEncounterInProgress())
-            return;  // wait for the boss to fully reset before regrouping
-
         ++raidWipes;
         raidStallSince = 0;
         LOG_INFO("playerbots", "RAID EXP: WIPE #{} at {}", raidWipes, NAXX_OBJECTIVE_NAMES[raidObjective]);
@@ -1894,7 +1882,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             if (!bot || !bot->IsInWorld())
                 continue;
             bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-4.0f, 4.0f), NAXX_ENTRANCE.y + frand(-4.0f, 4.0f),
-                            NAXX_ENTRANCE.z, 0.0f);
+                            NAXX_ENTRANCE.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
@@ -1972,7 +1960,8 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             Player* bot = GetPlayerBot(guid);
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
                 continue;
-            bot->TeleportTo(NAXX_MAP_ID, storm.x + frand(-3.0f, 3.0f), storm.y + frand(-3.0f, 3.0f), storm.z, 0.0f);
+            bot->TeleportTo(NAXX_MAP_ID, storm.x + frand(-3.0f, 3.0f), storm.y + frand(-3.0f, 3.0f), storm.z, 0.0f,
+                            TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
@@ -2000,32 +1989,24 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         // routes through the same "entering the instance" gate as a fresh login
         // (InstanceMap::CannotEnter), which raids refuse while an encounter is in
         // progress (TRANSFER_ABORT_ZONE_IN_COMBAT) — precisely when a raise matters
-        // most. The rejected transfer strands them at the instance's exterior entry
-        // point (Dragonblight), fully bound and grouped, looking like a phantom kick.
-        // Fix: raise IN PLACE during combat (no relocation, so no re-entry check);
-        // only teleport-regroup to the anchor when no encounter is active.
-        InstanceScript* raidScript = anchor->GetInstanceScript();
-        bool const combatLive = raidScript && raidScript->IsEncounterInProgress();
-
+        // most. TELE_TO_GM_MODE (below) bypasses that gate entirely, so the raise
+        // can always relocate to the anchor now, live combat or not.
         for (ObjectGuid const& guid : raidBots)
         {
             Player* bot = GetPlayerBot(guid);
             if (!bot || !bot->IsInWorld() || bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
                 continue;
 
-            if (!combatLive)
-            {
-                bot->TeleportTo(NAXX_MAP_ID, anchor->GetPositionX() + frand(-3.0f, 3.0f),
-                                anchor->GetPositionY() + frand(-3.0f, 3.0f), anchor->GetPositionZ(), 0.0f);
-                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-                    if (bot->IsBeingTeleported())
-                        botAI->HandleTeleportAck();
-            }
+            bot->TeleportTo(NAXX_MAP_ID, anchor->GetPositionX() + frand(-3.0f, 3.0f),
+                            anchor->GetPositionY() + frand(-3.0f, 3.0f), anchor->GetPositionZ(), 0.0f,
+                            TELE_TO_GM_MODE);
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                if (bot->IsBeingTeleported())
+                    botAI->HandleTeleportAck();
 
             bot->ResurrectPlayer(0.7f);
             bot->SpawnCorpseBones();
-            LOG_INFO("playerbots", "RAID EXP: field-raised {} {}", bot->GetName(),
-                     combatLive ? "in place (encounter live)" : "at the anchor");
+            LOG_INFO("playerbots", "RAID EXP: field-raised {} at the anchor", bot->GetName());
         }
     }
 
