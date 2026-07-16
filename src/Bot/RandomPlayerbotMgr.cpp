@@ -2032,22 +2032,21 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     }
 
     // Nobody's personal combat flag is set — soldiers standing at attention with no
-    // order to fire. Force the pull: without a real player master, raid AI never
-    // self-initiates on a boss it's simply standing near (the marathon "camping
-    // beside the boss" stalemate from earlier sessions). If we're in range, attack.
-    // Range MUST comfortably exceed the storm-suppression radius above (40yd) or a
-    // raid parked between the two thresholds gets neither stormed (looks like it
-    // might be fighting) nor pulled (too far) — confirmed live: a raid sat frozen
-    // ~28 yards out, past the old 15yd pull range but inside the 40yd storm-hold.
+    // order to fire. v16's raw bot->Attack() forced SOME engagement but kept
+    // re-firing every pass (visible as repeated storms even after landing on the
+    // boss) — each bot's own AI loop was overriding a directive it didn't recognize
+    // as a real threat, since Attack() bypasses the "attackers" value the combat AI
+    // actually reads from (AttackersValue::Calculate). The mod's own intended
+    // mechanism for this is the raid skull marker (target icon 7): AttackersValue
+    // explicitly includes whatever's skull-marked as a valid attacker regardless of
+    // threat state, and the module ships dedicated Anub'Rekhan/etc fight logic that
+    // expects targets to arrive this way. Marking the boss lets their own combat AI
+    // — not my blunt Attack() call — run the actual fight.
     if (Creature* pullTarget = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 45.0f, true))
     {
-        for (ObjectGuid const& guid : raidBots)
-        {
-            Player* bot = GetPlayerBot(guid);
-            if (bot && bot->IsInWorld() && bot->IsAlive() && bot->GetMapId() == NAXX_MAP_ID)
-                bot->Attack(pullTarget, true);
-        }
-        LOG_INFO("playerbots", "RAID EXP: forcing the pull on {}", NAXX_OBJECTIVE_NAMES[raidObjective]);
+        if (Group* group = leader->GetGroup())
+            group->SetTargetIcon(7, leader->GetGUID(), pullTarget->GetGUID());
+        LOG_INFO("playerbots", "RAID EXP: marking {} for the pull", NAXX_OBJECTIVE_NAMES[raidObjective]);
         return;
     }
 
