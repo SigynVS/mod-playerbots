@@ -1375,8 +1375,13 @@ namespace
         { 3511.4f, -3921.6f, 299.5f },  // Maexxna
     };
     constexpr uint32 NAXX_BOSS_ENTRIES[NAXX_OBJECTIVE_COUNT] = { 15956, 15953, 15952 };
-    // Instance-script encounter indices (naxxramas.h: BOSS_ANUB=6, BOSS_FAERLINA=7, BOSS_MAEXXNA=8)
-    constexpr uint32 NAXX_BOSS_STATE_INDEX[NAXX_OBJECTIVE_COUNT] = { 6, 7, 8 };
+    // Instance-script encounter indices — VERIFIED LIVE via `.instance getbossstate`,
+    // not the naxxramas.h enum names (BOSS_ANUB=6 etc. refer to a different indexing
+    // scheme than the instance script's own boss array). Confirmed: id 0 = Anub'Rekhan,
+    // id 1 = Grand Widow Faerlina, id 2 = Maexxna. The old {6,7,8} was silently
+    // watching Military Wing bosses (6 = Instructor Razuvious) — every "journal
+    // verified" clear check tonight was checking the wrong door.
+    constexpr uint32 NAXX_BOSS_STATE_INDEX[NAXX_OBJECTIVE_COUNT] = { 0, 1, 2 };
     char const* const NAXX_OBJECTIVE_NAMES[NAXX_OBJECTIVE_COUNT] = { "Anub'Rekhan", "Grand Widow Faerlina", "Maexxna" };
 }
 
@@ -2022,7 +2027,11 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     // order to fire. Force the pull: without a real player master, raid AI never
     // self-initiates on a boss it's simply standing near (the marathon "camping
     // beside the boss" stalemate from earlier sessions). If we're in range, attack.
-    if (Creature* pullTarget = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 15.0f, true))
+    // Range MUST comfortably exceed the storm-suppression radius above (40yd) or a
+    // raid parked between the two thresholds gets neither stormed (looks like it
+    // might be fighting) nor pulled (too far) — confirmed live: a raid sat frozen
+    // ~28 yards out, past the old 15yd pull range but inside the 40yd storm-hold.
+    if (Creature* pullTarget = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 45.0f, true))
     {
         for (ObjectGuid const& guid : raidBots)
         {
