@@ -1366,7 +1366,15 @@ namespace
 
     // Raid expedition: a bot-only 10-man attempts the Naxxramas Spider Wing
     constexpr uint32 NAXX_MAP_ID = 533;
-    constexpr WgPoint NAXX_ENTRANCE = { 3005.7f, -3447.8f, 293.9f };
+    // Moved 2026-07-15: the original point (3005.7,-3447.8) sits almost exactly on
+    // area trigger cluster 5196-5199 (verified live in acore_world.areatrigger),
+    // an EXIT portal to Dragonblight (target 3679,-1278 on map 571). Any bot placed
+    // or lingering there — fresh muster, wipe-recovery regroup — could get bounced
+    // straight back out by the game's own area-trigger system, independent of
+    // anything TeleportTo/CannotEnter related (this was firing even after v17's
+    // fix closed the encounter-in-progress bounce). Pushed 55yd further into the
+    // corridor, clear of the trigger volume, along the raid's own observed march path.
+    constexpr WgPoint NAXX_ENTRANCE = { 3060.0f, -3445.0f, 293.9f };
     constexpr WgPoint DALARAN_DROPOFF = { 5809.55f, 587.94f, 660.94f };
     constexpr uint8 NAXX_OBJECTIVE_COUNT = 3;
     constexpr WgPoint NAXX_OBJECTIVES[NAXX_OBJECTIVE_COUNT] = {
