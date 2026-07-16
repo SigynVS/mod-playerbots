@@ -110,6 +110,18 @@ bool AutoReleaseSpiritAction::Execute(Event /*event*/)
 
 bool AutoReleaseSpiritAction::isUseful()
 {
+    // THE actual root cause of tonight's ejection-cascade mystery: this class does
+    // NOT go through ReleaseSpiritAction::Execute (it fully overrides Execute), so
+    // the raid-expedition gate added there never ran for it. ShouldAutoRelease()
+    // returns true unconditionally when !HasActivePlayerMaster() — which is EVERY
+    // expedition bot, always, since the whole premise is no real player is leading
+    // them. Each bot's own AI evaluates this far more often than the medic's 10s
+    // pass, so a bot could auto-release straight to an external graveyard
+    // (RepopAction::PerformGraveyardTeleport, a teleport call site outside anything
+    // audited tonight) before the medic ever got a chance to raise it in place.
+    if (sRandomPlayerbotMgr.IsRaidExpeditionBot(bot->GetGUID()))
+        return false;
+
     if (!bot->isDead() || bot->InArena())
         return false;
 
