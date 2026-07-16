@@ -1391,6 +1391,23 @@ namespace
     // verified" clear check tonight was checking the wrong door.
     constexpr uint32 NAXX_BOSS_STATE_INDEX[NAXX_OBJECTIVE_COUNT] = { 0, 1, 2 };
     char const* const NAXX_OBJECTIVE_NAMES[NAXX_OBJECTIVE_COUNT] = { "Anub'Rekhan", "Grand Widow Faerlina", "Maexxna" };
+
+    // Naxx rooms float over a void terrain shell (confirmed earlier tonight — this
+    // is why storm scatter is tight, not zero). Jittering X/Y blindly risks landing
+    // on a floor GAP; GetHeight() searching downward through a gap finds the void
+    // ground far below instead of the room floor — exactly the fall-through this is
+    // meant to prevent, not a fix for it. So: try the jitter, verify the found
+    // height is actually near the expected floor, and only trust it if so;
+    // otherwise land on the known-good point with zero jitter risk.
+    WgPoint SafeLandingSpot(Map* map, float baseX, float baseY, float baseZ, float jitterRange)
+    {
+        float x = baseX + frand(-jitterRange, jitterRange);
+        float y = baseY + frand(-jitterRange, jitterRange);
+        float height = map->GetHeight(x, y, baseZ + 5.0f, true, 20.0f);
+        if (std::abs(height - baseZ) < 5.0f)
+            return { x, y, height };
+        return { baseX, baseY, baseZ };
+    }
 }
 
 void RandomPlayerbotMgr::CheckWgQueue()
@@ -1973,8 +1990,8 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             Player* bot = GetPlayerBot(guid);
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
                 continue;
-            bot->TeleportTo(NAXX_MAP_ID, storm.x + frand(-3.0f, 3.0f), storm.y + frand(-3.0f, 3.0f), storm.z, 0.0f,
-                            TELE_TO_GM_MODE);
+            WgPoint landing = SafeLandingSpot(bot->GetMap(), storm.x, storm.y, storm.z, 3.0f);
+            bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
@@ -2010,9 +2027,9 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             if (!bot || !bot->IsInWorld() || bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
                 continue;
 
-            bot->TeleportTo(NAXX_MAP_ID, anchor->GetPositionX() + frand(-3.0f, 3.0f),
-                            anchor->GetPositionY() + frand(-3.0f, 3.0f), anchor->GetPositionZ(), 0.0f,
-                            TELE_TO_GM_MODE);
+            WgPoint landing = SafeLandingSpot(bot->GetMap(), anchor->GetPositionX(), anchor->GetPositionY(),
+                                              anchor->GetPositionZ(), 3.0f);
+            bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
