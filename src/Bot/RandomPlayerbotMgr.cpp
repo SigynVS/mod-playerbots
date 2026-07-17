@@ -1364,33 +1364,69 @@ namespace
     constexpr WgPoint WG_GATE = { 5162.99f, 2841.23f, 410.16f };     // GO 190375
     constexpr WgPoint WG_SIEGE_POST = { 5105.0f, 2841.0f, 403.0f };  // bombardment range, south of gate
 
-    // Raid expedition: a bot-only 10-man attempts the Naxxramas Spider Wing
-    constexpr uint32 NAXX_MAP_ID = 533;
-    // Moved 2026-07-15: the original point (3005.7,-3447.8) sits almost exactly on
-    // area trigger cluster 5196-5199 (verified live in acore_world.areatrigger),
-    // an EXIT portal to Dragonblight (target 3679,-1278 on map 571). Any bot placed
-    // or lingering there — fresh muster, wipe-recovery regroup — could get bounced
-    // straight back out by the game's own area-trigger system, independent of
-    // anything TeleportTo/CannotEnter related (this was firing even after v17's
-    // fix closed the encounter-in-progress bounce). Pushed 55yd further into the
-    // corridor, clear of the trigger volume, along the raid's own observed march path.
-    constexpr WgPoint NAXX_ENTRANCE = { 3060.0f, -3445.0f, 293.9f };
+    // Raid missions: a bot-only 10-man attempts a scripted objective chain.
+    // Boss state indices are each instance script's OWN enum values (naxxramas.h /
+    // obsidian_sanctum.h / onyxias_lair.h) — the array GetBossState() actually
+    // reads. DO NOT "verify" them with `.instance getbossstate`: that command
+    // prints DBC-ordered NAMES beside script-ordered STATES and the orderings
+    // differ (in Naxx this once caused a {0,1,2} regression that left a genuine,
+    // journal-confirmed Anub'Rekhan kill uncredited). Read the header enum.
+    //
+    // Spider Wing entrance note (2026-07-15): the original point (3005.7,-3447.8)
+    // sits on exit-portal area triggers 5196-5199 (verified in acore_world) — the
+    // current point is 55yd further in, clear of the trigger volume.
     constexpr WgPoint DALARAN_DROPOFF = { 5809.55f, 587.94f, 660.94f };
-    constexpr uint8 NAXX_OBJECTIVE_COUNT = 3;
-    constexpr WgPoint NAXX_OBJECTIVES[NAXX_OBJECTIVE_COUNT] = {
-        { 3308.6f, -3476.3f, 287.2f },  // Anub'Rekhan
-        { 3353.2f, -3620.1f, 261.1f },  // Grand Widow Faerlina
-        { 3511.4f, -3921.6f, 299.5f },  // Maexxna
+
+    struct RaidMissionDef
+    {
+        char const* name;
+        uint32 mapId;
+        WgPoint entrance;
+        uint8 objectiveCount;
+        WgPoint objectives[4];
+        uint32 bossEntries[4];
+        uint32 bossStateIndex[4];
+        char const* objectiveNames[4];
+        // Eligible for the idle auto-loop's random rotation. Manual launches via
+        // the mission board / .mission start ignore this — it only spares the
+        // overnight show from missions whose layout still needs tuning.
+        bool autoLoop;
     };
-    constexpr uint32 NAXX_BOSS_ENTRIES[NAXX_OBJECTIVE_COUNT] = { 15956, 15953, 15952 };
-    // Instance-script encounter indices — VERIFIED LIVE via `.instance getbossstate`,
-    // not the naxxramas.h enum names (BOSS_ANUB=6 etc. refer to a different indexing
-    // scheme than the instance script's own boss array). Confirmed: id 0 = Anub'Rekhan,
-    // id 1 = Grand Widow Faerlina, id 2 = Maexxna. The old {6,7,8} was silently
-    // watching Military Wing bosses (6 = Instructor Razuvious) — every "journal
-    // verified" clear check tonight was checking the wrong door.
-    constexpr uint32 NAXX_BOSS_STATE_INDEX[NAXX_OBJECTIVE_COUNT] = { 0, 1, 2 };
-    char const* const NAXX_OBJECTIVE_NAMES[NAXX_OBJECTIVE_COUNT] = { "Anub'Rekhan", "Grand Widow Faerlina", "Maexxna" };
+
+    constexpr uint8 RAID_MISSION_COUNT = 3;
+    RaidMissionDef const RAID_MISSIONS[RAID_MISSION_COUNT] =
+    {
+        {
+            "Spider Wing of Naxxramas", 533, { 3060.0f, -3445.0f, 293.9f }, 3,
+            { { 3308.6f, -3476.3f, 287.2f }, { 3353.2f, -3620.1f, 261.1f }, { 3511.4f, -3921.6f, 299.5f }, {} },
+            { 15956, 15953, 15952, 0 },
+            { 6, 7, 8, 0 },
+            { "Anub'Rekhan", "Grand Widow Faerlina", "Maexxna", "" },
+            true,
+        },
+        {
+            // Drakes first, then a drake-less Sartharion — the PUG-proven order;
+            // Sarth with drakes up is a different (much harder) fight entirely.
+            // Drake objective points use ring-floor Z (~62), not their perch spawns.
+            "The Obsidian Sanctum", 615, { 3228.6f, 385.9f, 65.5f }, 4,
+            { { 3239.1f, 657.2f, 62.0f }, { 3363.1f, 525.3f, 62.0f }, { 3145.7f, 520.7f, 62.0f }, { 3246.6f, 551.3f, 58.6f } },
+            { 30452, 30451, 30449, 28860 },
+            { 1, 3, 2, 0 },
+            { "Tenebron", "Shadron", "Vesperon", "Sartharion" },
+            // Manual-only: overnight 2026-07-17 the raid died repeatedly at the
+            // estimated drake ground points without ever engaging (ambient lava,
+            // perched drakes) — objective coordinates need live tuning first.
+            false,
+        },
+        {
+            "Onyxia's Lair", 249, { 29.2f, -71.3f, -8.2f }, 1,
+            { { -10.6f, -219.4f, -87.7f }, {}, {}, {} },
+            { 10184, 0, 0, 0 },
+            { 0, 0, 0, 0 },
+            { "Onyxia", "", "", "" },
+            true,
+        },
+    };
 
     // Naxx rooms float over a void terrain shell (confirmed earlier tonight — this
     // is why storm scatter is tight, not zero). Jittering X/Y blindly risks landing
@@ -1634,7 +1670,14 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     RaidExpCheckTimer = time(nullptr);
 
     if (raidState == 2)
-        return;
+    {
+        // All-night loop: don't stay concluded forever — let the roster scatter,
+        // repair, and settle in Dalaran, then reopen muster for a fresh attempt.
+        if (time(nullptr) < raidCooldownUntil)
+            return;
+        LOG_INFO("playerbots", "RAID EXP: cooldown elapsed — reopening muster for a fresh expedition");
+        raidState = 0;
+    }
 
     auto releaseRaid = [this](char const* verdict)
     {
@@ -1661,6 +1704,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         raidBots.clear();
         raidLeader.Clear();
         raidState = 2;
+        raidCooldownUntil = time(nullptr) + 60;
     };
 
     // ---- Muster phase ----
@@ -1670,10 +1714,30 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         if (GameTime::GetUptime().count() < 240)
             return;
 
+        // Mission select: a player request (mission board / .mission start) takes
+        // priority; otherwise the auto-loop rolls a random mission for ambient
+        // content, or stands down entirely if the loop is configured off.
+        int8 mission = raidPendingMission;
+        if (mission < 0)
+        {
+            if (!sPlayerbotAIConfig.raidExpeditionAutoLoop)
+                return;
+            uint8 pool[RAID_MISSION_COUNT];
+            uint8 poolSize = 0;
+            for (uint8 i = 0; i < RAID_MISSION_COUNT; ++i)
+                if (RAID_MISSIONS[i].autoLoop)
+                    pool[poolSize++] = i;
+            if (!poolSize)
+                return;
+            mission = int8(pool[urand(0, poolSize - 1)]);
+        }
+        RaidMissionDef const& M = RAID_MISSIONS[mission];
+
         struct Candidate
         {
             Player* bot;
             uint32 score;
+            bool ranged;
         };
         std::vector<Candidate> tanks, heals, dps;
 
@@ -1703,13 +1767,19 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
                           (cls == CLASS_PALADIN && spec == 1);
             bool isHeal = (cls == CLASS_PRIEST && spec != 2) || (cls == CLASS_PALADIN && spec == 0) ||
                           (cls == CLASS_SHAMAN && spec == 2) || (cls == CLASS_DRUID && spec == 2);
+            // Ranged DPS carry air/immunity phases (Onyxia's air phase crawled at a
+            // fraction of normal output because the roster leaned melee) — the
+            // drafter prefers them wholesale; melee only fill leftover slots.
+            bool isRanged = cls == CLASS_MAGE || cls == CLASS_WARLOCK || cls == CLASS_HUNTER ||
+                            (cls == CLASS_PRIEST && spec == 2) || (cls == CLASS_SHAMAN && spec == 0) ||
+                            (cls == CLASS_DRUID && spec == 0);
 
             if (isTank)
-                tanks.push_back({ bot, score });
+                tanks.push_back({ bot, score, false });
             else if (isHeal)
-                heals.push_back({ bot, score });
+                heals.push_back({ bot, score, false });
             else
-                dps.push_back({ bot, score });
+                dps.push_back({ bot, score, isRanged });
         }
 
         if (tanks.size() < 2 || heals.size() < 3 || dps.size() < 5)
@@ -1725,8 +1795,29 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             roster.push_back(tanks[i].bot);
         for (int i = 0; i < 3; ++i)
             roster.push_back(heals[i].bot);
-        for (int i = 0; i < 5; ++i)
-            roster.push_back(dps[i].bot);
+
+        // DPS mix: up to 3 ranged first (air/immunity phases need them — Onyxia's
+        // maiden kill was carried by a ranged core), then the best remaining by
+        // gear regardless of type. The v37 all-ranged draft overcorrected: pure
+        // mage/warlock cores folded in Anub'Rekhan's add-heavy opener that
+        // melee-mixed rosters had cleared eight times straight.
+        std::vector<Candidate const*> picked;
+        for (Candidate const& c : dps)
+            if (c.ranged && picked.size() < 3)
+                picked.push_back(&c);
+        for (Candidate const& c : dps)
+        {
+            if (picked.size() >= 5)
+                break;
+            bool already = false;
+            for (Candidate const* p : picked)
+                if (p == &c)
+                    already = true;
+            if (!already)
+                picked.push_back(&c);
+        }
+        for (Candidate const* c : picked)
+            roster.push_back(c->bot);
 
         Player* leader = roster[0];
         Group* group = new Group();
@@ -1757,11 +1848,31 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         }
 
         raidBots.clear();
+        // Clean slate: a bot drafted again after an earlier expedition must not
+        // inherit stale ejection-retry counts from that previous run.
+        raidReinsertions.clear();
         for (Player* bot : roster)
         {
             // Virgin instance guarantee: wipe any old Naxx raid lock, or a veteran's
             // bind drags the whole expedition into a used instance with dead bosses
-            sInstanceSaveMgr->PlayerUnbindInstance(bot->GetGUID(), NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL, true, bot);
+            sInstanceSaveMgr->PlayerUnbindInstance(bot->GetGUID(), M.mapId, RAID_DIFFICULTY_10MAN_NORMAL, true, bot);
+
+            // Quartermaster: they fight alone, but not in blues. Instrumented wipes in
+            // ilvl-200 gear plateaued at boss 44-62% — a pure length-of-fight loss (every
+            // extra Locust Swarm cycle costs bodies). Epics capped at mixed-GS 331
+            // (ilvl 226 × the 1.4641 epic multiplier — Ulduar tier, what a guild farms
+            // before re-clearing Naxx) shorten the fight instead of softening the boss,
+            // plus the full pre-raid ritual: enchants, gems, potions, food, class consumables.
+            PlayerbotFactory quartermaster(bot, bot->GetLevel(), ITEM_QUALITY_EPIC, 331);
+            quartermaster.InitEquipment(false);
+            quartermaster.ApplyEnchantAndGemsNew();
+            quartermaster.InitGlyphs(false);
+            quartermaster.InitAmmo();
+            quartermaster.InitPet();
+            quartermaster.InitPetTalents();
+            quartermaster.InitPotions();
+            quartermaster.InitFood();
+            quartermaster.InitConsumables();
 
             PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
             if (botAI)
@@ -1771,8 +1882,8 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             // so this one relies on tight jitter rather than SafeLandingSpot's live
             // check (unlike the other 4 jittered teleports below, all of which land
             // on an ALREADY-populated Naxx map and get the floor-verified version).
-            bot->TeleportTo(NAXX_MAP_ID, NAXX_ENTRANCE.x + frand(-1.0f, 1.0f), NAXX_ENTRANCE.y + frand(-1.0f, 1.0f),
-                            NAXX_ENTRANCE.z, 0.0f, TELE_TO_GM_MODE);
+            bot->TeleportTo(M.mapId, M.entrance.x + frand(-1.0f, 1.0f), M.entrance.y + frand(-1.0f, 1.0f),
+                            M.entrance.z, 0.0f, TELE_TO_GM_MODE);
             if (bot->IsBeingTeleported() && botAI)
                 botAI->HandleTeleportAck();
 
@@ -1782,15 +1893,28 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         }
 
         raidLeader = leader->GetGUID();
+        raidActiveMission = mission;
+        raidPendingMission = -1;  // consume the request only on a successful muster
         raidObjective = 0;
         raidWipes = 0;
         raidState = 1;
         raidBossStartTime = time(nullptr);
-        LOG_INFO("playerbots", "RAID EXP: 10 bots inserted into Naxxramas — Spider Wing expedition begins");
+        // A dissolved-roster failure can leave these mid-count; a fresh expedition
+        // must start its stall clock from zero, not inherit a stale timestamp.
+        raidStallSince = 0;
+        raidBestDist = 0.0f;
+        raidBossLowestHp = 100.0f;
+        LOG_INFO("playerbots", "RAID EXP: 10 bots inserted — mission '{}' begins", M.name);
         return;
     }
 
     // ---- Progress phase ----
+    if (raidActiveMission < 0 || raidActiveMission >= RAID_MISSION_COUNT)
+    {
+        releaseRaid("expedition aborted — no valid active mission");
+        return;
+    }
+    RaidMissionDef const& M = RAID_MISSIONS[raidActiveMission];
     Player* leader = GetPlayerBot(raidLeader);
 
     // Ack any teleport still in flight, EVERY pass, for every raid bot — not just
@@ -1819,7 +1943,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             itr = raidBots.erase(itr);
             continue;
         }
-        if (bot->IsInWorld() && bot->GetMapId() != NAXX_MAP_ID && !bot->IsBeingTeleported())
+        if (bot->IsInWorld() && bot->GetMapId() != M.mapId && !bot->IsBeingTeleported())
         {
             // Caught at the moment of loss, with the state that explains it. Log once.
             bool const alreadySeen = raidReinsertions.count(bot->GetGUID()) != 0;
@@ -1828,7 +1952,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             {
                 Group* g = bot->GetGroup();
                 InstancePlayerBind* ownBind = sInstanceSaveMgr->PlayerGetBoundInstance(
-                    bot->GetGUID(), NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL);
+                    bot->GetGUID(), M.mapId, RAID_DIFFICULTY_10MAN_NORMAL);
                 LOG_INFO("playerbots",
                          "RAID EXP: ejection alert — {} expelled to map={} zone={} alive={} group={} members={} "
                          "ownBind={}",
@@ -1843,12 +1967,12 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             // lull anymore; the whole "wait and hope" dance from v13 was working
             // around a check this flag was built to skip. Still capped at five
             // attempts as a sanity net against some other, unrelated failure mode.
-            if (attempts < 5 && leader && leader->IsInWorld() && leader->GetMapId() == NAXX_MAP_ID)
+            if (attempts < 5 && leader && leader->IsInWorld() && leader->GetMapId() == M.mapId)
             {
                 ++attempts;
                 WgPoint landing = SafeLandingSpot(leader->GetMap(), leader->GetPositionX(), leader->GetPositionY(),
                                                   leader->GetPositionZ(), 4.0f);
-                bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
+                bot->TeleportTo(M.mapId, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
                 if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                     if (bot->IsBeingTeleported())
                         botAI->HandleTeleportAck();
@@ -1861,7 +1985,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             itr = raidBots.erase(itr);
             continue;
         }
-        if (bot->IsInWorld() && bot->GetMapId() == NAXX_MAP_ID)
+        if (bot->IsInWorld() && bot->GetMapId() == M.mapId)
         {
             ++present;
             if (bot->IsAlive())
@@ -1873,7 +1997,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     }
 
     // Leader lost (died and slipped out, or despawned): promote a survivor instead of dissolving
-    if (!leader || !leader->IsInWorld() || leader->GetMapId() != NAXX_MAP_ID)
+    if (!leader || !leader->IsInWorld() || leader->GetMapId() != M.mapId)
     {
         if (!leader)
             LOG_INFO("playerbots", "RAID EXP: leader {} vanished from the bot map (logout)", raidLeader.ToString());
@@ -1885,7 +2009,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         for (ObjectGuid const& guid : raidBots)
         {
             Player* bot = GetPlayerBot(guid);
-            if (bot && bot->IsInWorld() && bot->GetMapId() == NAXX_MAP_ID)
+            if (bot && bot->IsInWorld() && bot->GetMapId() == M.mapId)
             {
                 leader = bot;
                 raidLeader = guid;
@@ -1912,14 +2036,120 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         return;
     }
 
-    // Full wipe: regroup at the entrance and try again, up to a limit.
-    // TELE_TO_GM_MODE (below) bypasses the encounter-in-progress refusal that
-    // used to bounce this exact mass-teleport, so no need to wait for a reset.
-    if (alive == 0)
+    // Boss vitals: sample the objective's health every pass so each wipe records
+    // how close the attempt actually got — 31 blind wipes couldn't say whether the
+    // raid dies at 80% (hopeless) or 8% (a nudge from winning)
+    static time_t raidLastProgress = 0;
+    Creature* objBoss = leader->FindNearestCreature(M.bossEntries[raidObjective], 150.0f);
+    if (objBoss && objBoss->GetHealthPct() < raidBossLowestHp)
+    {
+        raidBossLowestHp = objBoss->GetHealthPct();
+        raidLastProgress = time(nullptr);
+    }
+
+    // Losing-fight detector: the medic can mask an unwinnable engagement forever —
+    // seen live at Faerlina: 12+ minutes engaged, boss untouched at 100%, roster
+    // churning 10→4→10 as every rez landed straight back in the grinder. A geared
+    // raid that's winning dents the boss inside two minutes; four minutes genuinely
+    // engaged without ever pushing it below 90% is a lost fight. Call the tactical
+    // retreat: count a wipe and regroup at the entrance — once the bodies stop
+    // coming, the boss evades on its own, which also clears the encounter state.
+    static time_t raidEngageSince = 0;
+    InstanceScript* progressScript = leader->GetInstanceScript();
+    bool const objectiveEngaged =
+        progressScript && progressScript->GetBossState(M.bossStateIndex[raidObjective]) == IN_PROGRESS;
+    if (!objectiveEngaged)
+    {
+        raidEngageSince = 0;
+        // Evade wipes the slate: "lowest HP" means this ENGAGEMENT, not this
+        // objective. A near-kill that evades (observed live: Maexxna reset at 11%)
+        // otherwise leaves the tracker poisoned, permanently disarming both the
+        // breach and the retreat for every re-pull — the raid stood beside a
+        // full-health boss with no automatic escape, three manual unsticks in a row.
+        if (objBoss && !objBoss->IsInCombat() && objBoss->GetHealthPct() >= 99.9f)
+            raidBossLowestHp = 100.0f;
+    }
+    else if (raidEngageSince == 0)
+    {
+        raidEngageSince = time(nullptr);
+        raidLastProgress = time(nullptr);
+    }
+
+    // Half-engagement deadlock breaker: if the boss is live and ENGAGED, keep the
+    // skull mark refreshed on him every pass. The idle-pull below only fires when
+    // nobody is in combat — so a boss who aggroed onto one straggler left the other
+    // nine spectating at full health for four minutes (storm suppressed by the live
+    // encounter, march suppressed by that one bot's combat flag) until the retreat
+    // bailed them out. The skull feeds him into every bot's AttackersValue, turning
+    // a solo leash-war into the raid fight it was supposed to be.
+    if (objBoss && objBoss->IsAlive() && (objectiveEngaged || objBoss->IsInCombat()))
+        if (Group* g = leader->GetGroup())
+            g->SetTargetIcon(7, leader->GetGUID(), objBoss->GetGUID());
+
+    // Breach maneuver: engaged-but-not-fighting is a deadlock the skull alone
+    // can't break — bots outside the boss's threat never enter combat state, and
+    // the non-combat engine ignores the attackers list entirely, so nine
+    // spectators watch one straggler kite (observed live: 4 minutes engaged, boss
+    // 99-100%, roster at 10/10). Thirty seconds of that signature → storm the
+    // living onto the boss: proximity aggro flips every combat engine on, and the
+    // already-set skull plus the mod's own per-boss Naxx logic run the fight from
+    // there. Genuine fights never trip this — the lowest-HP tracker drops below
+    // 99 within moments of anyone actually swinging.
+    // Keyed to the boss's CURRENT health, not the engagement low: a post-evade
+    // re-engage wedge presents as "engaged, boss standing at full, nobody swinging"
+    // regardless of how close the previous pull came.
+    if (objectiveEngaged && objBoss && raidEngageSince && time(nullptr) - raidEngageSince > 30 &&
+        objBoss->GetHealthPct() >= 99.0f)
+    {
+        uint32 fighting = 0;
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (bot && bot->IsInWorld() && bot->IsInCombat())
+                ++fighting;
+        }
+        if (fighting < 3)
+        {
+            LOG_INFO("playerbots", "RAID EXP: breach — {} engaged but only {} fighting, storming the boss room",
+                     M.objectiveNames[raidObjective], fighting);
+            for (ObjectGuid const& guid : raidBots)
+            {
+                Player* bot = GetPlayerBot(guid);
+                if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->GetMapId() != M.mapId)
+                    continue;
+                WgPoint landing = SafeLandingSpot(bot->GetMap(), objBoss->GetPositionX(), objBoss->GetPositionY(),
+                                                  objBoss->GetPositionZ(), 3.0f);
+                bot->TeleportTo(M.mapId, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    if (bot->IsBeingTeleported())
+                        botAI->HandleTeleportAck();
+            }
+            raidStallSince = time(nullptr);
+            raidBestDist = 5.0f;
+            // Engagement clock keeps running: if the breach can't produce a real
+            // fight either, the four-minute tactical retreat remains the backstop.
+            return;
+        }
+    }
+
+    // Two retreat triggers: an engagement that never dented the boss (4 min with
+    // HP still >=90 — the doorway/add-pack grinder), and a MID-FIGHT progress
+    // freeze (8 min without the lowest-HP tracker improving — flying/immune/
+    // unreachable phases; Onyxia's air phase stalled a melee-heavy roster at 59%,
+    // which disarmed every threshold keyed to high HP). The freeze window is
+    // deliberately tolerant: slow air-phase grinds pause for minutes, then resume.
+    bool const retreatNoDent = raidEngageSince && time(nullptr) - raidEngageSince > 240 && raidBossLowestHp >= 90.0f;
+    bool const retreatNoProgress = raidLastProgress && time(nullptr) - raidLastProgress > 480;
+    if (objectiveEngaged && (retreatNoDent || retreatNoProgress))
     {
         ++raidWipes;
+        raidEngageSince = 0;
         raidStallSince = 0;
-        LOG_INFO("playerbots", "RAID EXP: WIPE #{} at {}", raidWipes, NAXX_OBJECTIVE_NAMES[raidObjective]);
+        LOG_INFO("playerbots",
+                 "RAID EXP: tactical retreat (wipe #{}) — {} on {} (low {:.0f}%), regrouping at the entrance",
+                 raidWipes, retreatNoDent ? "four minutes engaged without a dent" : "eight minutes without progress",
+                 M.objectiveNames[raidObjective], raidBossLowestHp);
+        raidBossLowestHp = 100.0f;
         if (raidWipes >= 4)
         {
             releaseRaid("expedition FAILED — four wipes, calling it");
@@ -1930,8 +2160,42 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             Player* bot = GetPlayerBot(guid);
             if (!bot || !bot->IsInWorld())
                 continue;
-            WgPoint landing = SafeLandingSpot(bot->GetMap(), NAXX_ENTRANCE.x, NAXX_ENTRANCE.y, NAXX_ENTRANCE.z, 4.0f);
-            bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
+            WgPoint landing = SafeLandingSpot(bot->GetMap(), M.entrance.x, M.entrance.y, M.entrance.z, 4.0f);
+            bot->TeleportTo(M.mapId, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                if (bot->IsBeingTeleported())
+                    botAI->HandleTeleportAck();
+            if (!bot->IsAlive())
+            {
+                bot->ResurrectPlayer(0.7f);
+                bot->SpawnCorpseBones();
+            }
+        }
+        return;
+    }
+
+    // Full wipe: regroup at the entrance and try again, up to a limit.
+    // TELE_TO_GM_MODE (below) bypasses the encounter-in-progress refusal that
+    // used to bounce this exact mass-teleport, so no need to wait for a reset.
+    if (alive == 0)
+    {
+        ++raidWipes;
+        raidStallSince = 0;
+        LOG_INFO("playerbots", "RAID EXP: WIPE #{} at {} — got the boss down to {:.0f}%", raidWipes,
+                 M.objectiveNames[raidObjective], raidBossLowestHp);
+        raidBossLowestHp = 100.0f;
+        if (raidWipes >= 4)
+        {
+            releaseRaid("expedition FAILED — four wipes, calling it");
+            return;
+        }
+        for (ObjectGuid const& guid : raidBots)
+        {
+            Player* bot = GetPlayerBot(guid);
+            if (!bot || !bot->IsInWorld())
+                continue;
+            WgPoint landing = SafeLandingSpot(bot->GetMap(), M.entrance.x, M.entrance.y, M.entrance.z, 4.0f);
+            bot->TeleportTo(M.mapId, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
@@ -1950,13 +2214,16 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         Group* g = leader->GetGroup();
         uint32 bindCount = 0;
         for (ObjectGuid const& guid : raidBots)
-            if (sInstanceSaveMgr->PlayerGetBoundInstance(guid, NAXX_MAP_ID, RAID_DIFFICULTY_10MAN_NORMAL))
+            if (sInstanceSaveMgr->PlayerGetBoundInstance(guid, M.mapId, RAID_DIFFICULTY_10MAN_NORMAL))
                 ++bindCount;
+        // boss=-1% means the objective isn't within 150yd of the leader (still marching)
         LOG_INFO("playerbots",
-                 "RAID EXP: status objective={} alive={}/{} leader at {:.0f},{:.0f} group={} members={} binds={}/{}",
-                 NAXX_OBJECTIVE_NAMES[raidObjective], alive, present, leader->GetPositionX(),
-                 leader->GetPositionY(), g ? (g->isRaidGroup() ? "raid" : "party") : "NONE",
-                 g ? g->GetMembersCount() : 0, bindCount, raidBots.size());
+                 "RAID EXP: status objective={} boss={:.0f}% (low {:.0f}%) alive={}/{} leader at {:.0f},{:.0f} "
+                 "group={} members={} binds={}/{}",
+                 M.objectiveNames[raidObjective], objBoss ? objBoss->GetHealthPct() : -1.0f, raidBossLowestHp,
+                 alive, present, leader->GetPositionX(), leader->GetPositionY(),
+                 g ? (g->isRaidGroup() ? "raid" : "party") : "NONE", g ? g->GetMembersCount() : 0, bindCount,
+                 raidBots.size());
     }
 
     // Stall breaker, progress-based: if the raid gets no CLOSER to the objective for 90s —
@@ -1964,7 +2231,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     // the manager storms the living roster straight onto the objective (tight scatter:
     // Naxx rooms float over a terrain shell and wide scatter drops bots off the floor)
     float const distToObjective =
-        leader->GetExactDist2d(NAXX_OBJECTIVES[raidObjective].x, NAXX_OBJECTIVES[raidObjective].y);
+        leader->GetExactDist2d(M.objectives[raidObjective].x, M.objectives[raidObjective].y);
     if (raidStallSince == 0 || distToObjective < raidBestDist - 5.0f)
     {
         raidBestDist = distToObjective;
@@ -1977,12 +2244,15 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         // a 90s teleport metronome for the whole boss fight. Distant combat (leash
         // wars in the void) still storms.
         //
-        // Check the INSTANCE's own encounter flag first, not just per-bot IsInCombat():
-        // the encounter can be genuinely engaged for a beat before every bot's personal
-        // combat flag catches up, and storming into that gap hits the exact same
-        // CannotEnter/IsEncounterInProgress bounce as the medic and wipe-recovery paths.
+        // Check OUR objective's own encounter state, NOT the instance-wide
+        // IsEncounterInProgress(). History: the global flag once read as permanently
+        // stuck (a standoff followed — raid parked 60yd from an evaded full-HP boss
+        // for 10+ minutes), which prompted this objective-specific guard. The "stuck"
+        // reading itself turned out to be the DBC-vs-script index mislabel (see
+        // the mission table above), but per-boss state remains strictly more
+        // correct here than the global OR of all fifteen encounters.
         InstanceScript* stallScript = leader->GetInstanceScript();
-        if (stallScript && stallScript->IsEncounterInProgress())
+        if (stallScript && stallScript->GetBossState(M.bossStateIndex[raidObjective]) == IN_PROGRESS)
         {
             raidStallSince = time(nullptr);
             return;
@@ -2001,16 +2271,16 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
             }
         }
 
-        WgPoint const& storm = NAXX_OBJECTIVES[raidObjective];
+        WgPoint const& storm = M.objectives[raidObjective];
         LOG_INFO("playerbots", "RAID EXP: no progress toward {} in 90s — storming it directly",
-                 NAXX_OBJECTIVE_NAMES[raidObjective]);
+                 M.objectiveNames[raidObjective]);
         for (ObjectGuid const& guid : raidBots)
         {
             Player* bot = GetPlayerBot(guid);
-            if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
+            if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->GetMapId() != M.mapId)
                 continue;
             WgPoint landing = SafeLandingSpot(bot->GetMap(), storm.x, storm.y, storm.z, 3.0f);
-            bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
+            bot->TeleportTo(M.mapId, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
@@ -2026,7 +2296,7 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     for (ObjectGuid const& guid : raidBots)
     {
         Player* bot = GetPlayerBot(guid);
-        if (bot && bot->IsInWorld() && bot->IsAlive() && bot->GetMapId() == NAXX_MAP_ID)
+        if (bot && bot->IsInWorld() && bot->IsAlive() && bot->GetMapId() == M.mapId)
         {
             anchor = bot;
             break;
@@ -2043,12 +2313,12 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
         for (ObjectGuid const& guid : raidBots)
         {
             Player* bot = GetPlayerBot(guid);
-            if (!bot || !bot->IsInWorld() || bot->IsAlive() || bot->GetMapId() != NAXX_MAP_ID)
+            if (!bot || !bot->IsInWorld() || bot->IsAlive() || bot->GetMapId() != M.mapId)
                 continue;
 
             WgPoint landing = SafeLandingSpot(bot->GetMap(), anchor->GetPositionX(), anchor->GetPositionY(),
                                               anchor->GetPositionZ(), 3.0f);
-            bot->TeleportTo(NAXX_MAP_ID, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
+            bot->TeleportTo(M.mapId, landing.x, landing.y, landing.z, 0.0f, TELE_TO_GM_MODE);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 if (bot->IsBeingTeleported())
                     botAI->HandleTeleportAck();
@@ -2078,38 +2348,43 @@ void RandomPlayerbotMgr::CheckRaidExpedition()
     // threat state, and the module ships dedicated Anub'Rekhan/etc fight logic that
     // expects targets to arrive this way. Marking the boss lets their own combat AI
     // — not my blunt Attack() call — run the actual fight.
-    if (Creature* pullTarget = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 45.0f, true))
+    if (Creature* pullTarget = leader->FindNearestCreature(M.bossEntries[raidObjective], 45.0f, true))
     {
         if (Group* group = leader->GetGroup())
             group->SetTargetIcon(7, leader->GetGUID(), pullTarget->GetGUID());
-        LOG_INFO("playerbots", "RAID EXP: marking {} for the pull", NAXX_OBJECTIVE_NAMES[raidObjective]);
+        LOG_INFO("playerbots", "RAID EXP: marking {} for the pull", M.objectiveNames[raidObjective]);
         return;
     }
 
     // Objective check: trust ONLY the instance script's own encounter journal.
     // Proximity heuristics produced two false kills (2D under-floor credit, and an
     // evade-window payout while the medic masked a slow-motion wipe)
-    WgPoint const& obj = NAXX_OBJECTIVES[raidObjective];
+    WgPoint const& obj = M.objectives[raidObjective];
     InstanceScript* script = leader->GetInstanceScript();
-    if (script && script->GetBossState(NAXX_BOSS_STATE_INDEX[raidObjective]) == DONE)
+    if (script && script->GetBossState(M.bossStateIndex[raidObjective]) == DONE)
     {
         LOG_INFO("playerbots", "RAID EXP: {} CLEARED after {}s ({} wipes) — encounter journal confirms",
-                 NAXX_OBJECTIVE_NAMES[raidObjective], time(nullptr) - raidBossStartTime, raidWipes);
+                 M.objectiveNames[raidObjective], time(nullptr) - raidBossStartTime, raidWipes);
 
         // Spoils of war: crack the boss open before marching on; the bots' own
         // loot-roll and auto-equip machinery handles distribution from here
-        if (Creature* corpse = leader->FindNearestCreature(NAXX_BOSS_ENTRIES[raidObjective], 100.0f, false))
+        if (Creature* corpse = leader->FindNearestCreature(M.bossEntries[raidObjective], 100.0f, false))
         {
             leader->SendLoot(corpse->GetGUID(), LOOT_CORPSE);
-            LOG_INFO("playerbots", "RAID EXP: looting the corpse of {}", NAXX_OBJECTIVE_NAMES[raidObjective]);
+            LOG_INFO("playerbots", "RAID EXP: looting the corpse of {}", M.objectiveNames[raidObjective]);
         }
         ++raidObjective;
         raidWipes = 0;
         raidStallSince = 0;
+        raidBossLowestHp = 100.0f;
         raidBossStartTime = time(nullptr);
 
-        if (raidObjective >= NAXX_OBJECTIVE_COUNT)
-            releaseRaid("SPIDER WING CLEARED — bot-only raid SUCCESS, releasing the champions to Dalaran");
+        if (raidObjective >= M.objectiveCount)
+        {
+            std::string verdict = std::string("MISSION SUCCESS — ") + M.name +
+                                  " complete, bot-only raid, releasing the champions to Dalaran";
+            releaseRaid(verdict.c_str());
+        }
         return;
     }
 
@@ -2256,6 +2531,45 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
     return false;
 }
 
+uint8 RandomPlayerbotMgr::GetRaidMissionCount() const
+{
+    return RAID_MISSION_COUNT;
+}
+
+char const* RandomPlayerbotMgr::GetRaidMissionName(uint8 index) const
+{
+    return index < RAID_MISSION_COUNT ? RAID_MISSIONS[index].name : "";
+}
+
+bool RandomPlayerbotMgr::RequestRaidMission(uint8 index)
+{
+    if (index >= RAID_MISSION_COUNT)
+        return false;
+    raidPendingMission = int8(index);
+    return true;
+}
+
+std::string RandomPlayerbotMgr::GetRaidMissionStatusText() const
+{
+    std::string text;
+    if (raidState == 1 && raidActiveMission >= 0 && raidActiveMission < RAID_MISSION_COUNT)
+    {
+        RaidMissionDef const& M = RAID_MISSIONS[raidActiveMission];
+        text = std::string("RUNNING: ") + M.name + " — objective " + std::to_string(raidObjective + 1) + "/" +
+               std::to_string(M.objectiveCount) + " (" +
+               (raidObjective < M.objectiveCount ? M.objectiveNames[raidObjective] : "?") + "), wipes " +
+               std::to_string(raidWipes) + "/4";
+    }
+    else
+    {
+        text = "IDLE — no expedition in the field";
+    }
+
+    if (raidPendingMission >= 0 && raidPendingMission < RAID_MISSION_COUNT)
+        text += std::string(" | QUEUED: ") + RAID_MISSIONS[raidPendingMission].name;
+    return text;
+}
+
 bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 {
 
@@ -2318,7 +2632,12 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         idleBot = true;
     }
 
-    if (idleBot)
+    // Raid expedition members register as idle here (their muster strategy is
+    // "+stay", so they have no travel target) but must not be randomized (re-gears/
+    // re-specs mid-attempt) or teleported-for-level (yanks them straight out of the
+    // instance) — this loop runs independent of the AI strategy layer, so stripping
+    // -travel/-rpg/-grind at muster was never enough to stop it.
+    if (idleBot && !raidBots.count(bot->GetGUID()))
     {
         // randomize
         uint32 randomize = GetEventValue(botId, "randomize");

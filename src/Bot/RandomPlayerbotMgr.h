@@ -155,6 +155,10 @@ public:
     void CheckWgQueue();
     void CheckRaidExpedition();
     bool IsRaidExpeditionBot(ObjectGuid const& guid) const { return raidBots.count(guid) != 0; }
+    uint8 GetRaidMissionCount() const;
+    char const* GetRaidMissionName(uint8 index) const;
+    bool RequestRaidMission(uint8 index);
+    std::string GetRaidMissionStatusText() const;
     void CheckPlayers();
     void LogBattlegroundInfo();
 
@@ -213,7 +217,11 @@ private:
         this->raidWipes = 0;
         this->raidBossStartTime = 0;
         this->raidBestDist = 0.0f;
+        this->raidBossLowestHp = 100.0f;
         this->raidStallSince = 0;
+        this->raidCooldownUntil = 0;
+        this->raidActiveMission = -1;
+        this->raidPendingMission = -1;
         this->PlayersCheckTimer = 0;
     }
 
@@ -245,12 +253,16 @@ private:
     time_t RaidExpCheckTimer;
     std::unordered_set<ObjectGuid> raidBots;
     ObjectGuid raidLeader;
-    uint8 raidState;      // 0 = waiting to muster, 1 = expedition running, 2 = concluded
+    uint8 raidState;      // 0 = waiting to muster, 1 = expedition running, 2 = cooling down (loops back to 0)
     uint8 raidObjective;
     uint8 raidWipes;
     time_t raidBossStartTime;
     float raidBestDist;
+    float raidBossLowestHp;
     time_t raidStallSince;
+    time_t raidCooldownUntil;
+    int8 raidActiveMission;
+    int8 raidPendingMission;
     std::map<ObjectGuid, uint8> raidReinsertions;
     time_t PlayersCheckTimer;
     time_t RealPlayerLastTimeSeen = 0;

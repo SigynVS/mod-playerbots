@@ -530,6 +530,7 @@ void AddSC_TempestKeepBotScripts();
 void AddSC_HyjalSummitBotScripts();
 void AddSC_IcecrownBotScripts();
 void AddSC_RubySanctumBotScripts();
+void AddSC_warband_mission_board();
 
 void AddPlayerbotsScripts()
 {
@@ -549,4 +550,5 @@ void AddPlayerbotsScripts()
     AddSC_HyjalSummitBotScripts();
     AddSC_IcecrownBotScripts();
     AddSC_RubySanctumBotScripts();
+    AddSC_warband_mission_board();
 }
